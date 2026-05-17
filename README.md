@@ -47,8 +47,10 @@ Colab with a T4/A100/L4 GPU is recommended. My M4 MacBook Air can run the prepro
 ```bash
 git clone https://github.com/ayushmaankaria/Video-to-3D-Reconstruction.git
 cd Video-to-3D-Reconstruction
-pip install -r requirements.txt
+pip install -r requirements-colab.txt
 ```
+
+Use `requirements-colab.txt` in Colab because Colab already includes CUDA-enabled PyTorch. Installing the full local `requirements.txt` can waste a lot of time by trying to resolve or reinstall large Torch wheels.
 
 The input video is intentionally not committed to GitHub because phone videos are usually too large for a normal repository. In Colab, keep the video in Google Drive or upload it during the session, then point `--video` at that local Colab path.
 
