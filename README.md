@@ -1,7 +1,5 @@
 # Semantic VGGT Reconstruction
 
-Video-to-3D reconstruction for the Humanoid Perception and Spatial AI internship challenge.
-
 This system takes a short phone video of a small indoor scene, samples useful frames, reconstructs geometry with Meta's VGGT, projects semantic masks into 3D, and exports RGB and semantic point clouds for inspection.
 
 ## Why this approach
