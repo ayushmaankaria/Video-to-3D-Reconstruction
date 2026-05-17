@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+from .utils import normalize_uint8, resize_label_map_nearest, semantic_color
+
+
+@dataclass
+class FusedPointCloud:
+    points: np.ndarray
+    colors_rgb: np.ndarray
+    semantic_ids: np.ndarray
+    semantic_colors: np.ndarray
+    confidence: np.ndarray
+    labels: dict[int, str]
+
+
+def _prediction_points(predictions: dict, use_point_map: bool) -> tuple[np.ndarray, np.ndarray]:
+    if use_point_map and "world_points" in predictions:
+        return predictions["world_points"], predictions.get("world_points_conf", predictions["depth_conf"])
+    return predictions["world_points_from_depth"], predictions["depth_conf"]
+
+
+def _voxel_reduce(
+    points: np.ndarray,
+    colors: np.ndarray,
+    labels: np.ndarray,
+    conf: np.ndarray,
+    voxel_size: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    if voxel_size <= 0 or len(points) == 0:
+        return points, colors, labels, conf
+
+    keys = np.floor(points / voxel_size).astype(np.int64)
+    _, inverse = np.unique(keys, axis=0, return_inverse=True)
+    n = int(inverse.max()) + 1
+
+    sums = np.zeros((n, 3), dtype=np.float64)
+    color_sums = np.zeros((n, 3), dtype=np.float64)
+    conf_sums = np.zeros(n, dtype=np.float64)
+    counts = np.bincount(inverse).astype(np.float64)
+    np.add.at(sums, inverse, points)
+    np.add.at(color_sums, inverse, colors.astype(np.float64))
+    np.add.at(conf_sums, inverse, conf)
+
+    order = np.argsort(-conf)
+    _, first = np.unique(inverse[order], return_index=True)
+    representative = order[first]
+    voxel_label = labels[representative]
+
+    return (
+        (sums / counts[:, None]).astype(np.float32),
+        np.clip(color_sums / counts[:, None], 0, 255).astype(np.uint8),
+        voxel_label.astype(np.int32),
+        (conf_sums / counts).astype(np.float32),
+    )
+
+
+def fuse_predictions(
+    predictions: dict,
+    label_maps: list[np.ndarray] | None = None,
+    labels: dict[int, str] | None = None,
+    conf_percentile: float = 35.0,
+    sample_stride: int = 2,
+    voxel_size: float = 0.015,
+    max_points: int = 450_000,
+    use_point_map: bool = False,
+    semantic_view: bool = True,
+) -> FusedPointCloud:
+    points_map, conf_map = _prediction_points(predictions, use_point_map=use_point_map)
+    images = predictions["images"]
+    if images.shape[1] == 3:
+        images = images.transpose(0, 2, 3, 1)
+
+    if points_map.shape[-1] != 3:
+        raise ValueError(f"Expected points with final dimension 3, got {points_map.shape}")
+
+    stride = max(int(sample_stride), 1)
+    points = points_map[:, ::stride, ::stride, :].reshape(-1, 3)
+    conf = conf_map[:, ::stride, ::stride].reshape(-1)
+    colors = normalize_uint8(images[:, ::stride, ::stride, :]).reshape(-1, 3)
+
+    semantic_ids = np.zeros(len(points), dtype=np.int32)
+    if label_maps:
+        resized = []
+        h, w = points_map.shape[1:3]
+        for label_map in label_maps[: points_map.shape[0]]:
+            resized.append(resize_label_map_nearest(label_map, (h, w))[::stride, ::stride])
+        if resized:
+            semantic_ids = np.stack(resized).reshape(-1).astype(np.int32)
+
+    finite = np.isfinite(points).all(axis=1) & np.isfinite(conf)
+    threshold = np.percentile(conf[finite], conf_percentile) if finite.any() else 0.0
+    keep = finite & (conf >= threshold) & (conf > 1e-6)
+
+    points = points[keep]
+    colors = colors[keep]
+    semantic_ids = semantic_ids[keep]
+    conf = conf[keep]
+
+    if len(points) > 20:
+        center = np.median(points, axis=0)
+        radius = np.linalg.norm(points - center, axis=1)
+        keep_radius = radius <= np.percentile(radius, 99.5)
+        points, colors, semantic_ids, conf = points[keep_radius], colors[keep_radius], semantic_ids[keep_radius], conf[keep_radius]
+
+    points, colors, semantic_ids, conf = _voxel_reduce(points, colors, semantic_ids, conf, voxel_size)
+
+    if len(points) > max_points:
+        rng = np.random.default_rng(7)
+        idx = rng.choice(len(points), size=max_points, replace=False)
+        points, colors, semantic_ids, conf = points[idx], colors[idx], semantic_ids[idx], conf[idx]
+
+    labels = labels or {0: "unknown"}
+    semantic_colors = np.asarray([semantic_color(int(label_id)) for label_id in semantic_ids], dtype=np.uint8)
+    export_colors = semantic_colors if semantic_view else colors
+    return FusedPointCloud(
+        points=points.astype(np.float32),
+        colors_rgb=export_colors.astype(np.uint8),
+        semantic_ids=semantic_ids.astype(np.int32),
+        semantic_colors=semantic_colors,
+        confidence=conf.astype(np.float32),
+        labels=labels,
+    )
+

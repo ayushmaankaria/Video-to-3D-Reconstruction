@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semantic-vggt-reconstruction"
+version = "0.1.0"
+description = "Video to semantic 3D reconstruction using Meta VGGT."
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["spatial_recon*"]
+
