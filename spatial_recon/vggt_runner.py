@@ -55,15 +55,28 @@ def run_vggt(
     image_paths = list_images(image_dir)
     if not image_paths:
         raise ValueError(f"No images found in {image_dir}")
+    from PIL import Image
+
+    source_image_hw = []
+    for image_path in image_paths:
+        with Image.open(image_path) as img:
+            width, height = img.size
+        source_image_hw.append((height, width))
 
     resolved_device = _resolve_device(device)
+    print(f"[VGGT] Using device: {resolved_device}")
+    if resolved_device == "cuda":
+        print(f"[VGGT] CUDA GPU: {torch.cuda.get_device_name(0)}")
     model = VGGT.from_pretrained(checkpoint).to(resolved_device)
     model.eval()
 
     images = load_and_preprocess_images([str(p) for p in image_paths]).to(resolved_device)
+    print(f"[VGGT] Loaded {len(image_paths)} frames with tensor shape {tuple(images.shape)}")
     with torch.no_grad():
         with _autocast_context(resolved_device):
+            print("[VGGT] Running model inference...")
             predictions = model(images)
+            print("[VGGT] Inference complete.")
 
     extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
     predictions["extrinsic"] = extrinsic
@@ -78,6 +91,7 @@ def run_vggt(
         depth, packed["extrinsic"], packed["intrinsic"]
     )
     packed["source_images"] = np.asarray([p.name for p in image_paths])
+    packed["source_image_hw"] = np.asarray(source_image_hw, dtype=np.int32)
 
     out_npz = Path(out_npz)
     ensure_dir(out_npz.parent)

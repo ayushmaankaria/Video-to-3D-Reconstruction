@@ -73,6 +73,8 @@ def write_cloud_npz(path: str | Path, cloud: FusedPointCloud) -> Path:
         source_frame=cloud.source_frame,
         source_y=cloud.source_y,
         source_x=cloud.source_x,
+        source_y_vggt=cloud.source_y_vggt,
+        source_x_vggt=cloud.source_x_vggt,
         label_ids=np.asarray(sorted(cloud.labels), dtype=np.int32),
         label_names=np.asarray([cloud.labels[k] for k in sorted(cloud.labels)], dtype=object),
     )

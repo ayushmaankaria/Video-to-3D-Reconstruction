@@ -38,7 +38,7 @@ def load_json(path: str | Path) -> dict:
 
 def resize_label_map_nearest(label_map: np.ndarray, size_hw: tuple[int, int]) -> np.ndarray:
     h, w = size_hw
-    img = Image.fromarray(label_map.astype(np.uint16), mode="I;16")
+    img = Image.fromarray(label_map.astype(np.int32))
     return np.asarray(img.resize((w, h), Image.Resampling.NEAREST)).astype(np.int32)
 
 

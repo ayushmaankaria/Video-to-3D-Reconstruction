@@ -48,6 +48,8 @@ runs/desk/
   REPORT.md                       # design choices and run summary
 ```
 
+`fused_points.npz` stores both original saved-frame pixel provenance (`source_y`, `source_x`) and VGGT-resolution pixel provenance (`source_y_vggt`, `source_x_vggt`). That distinction matters for future CLIP querying because image patches should be sampled from the saved frame resolution, not blindly from VGGT's internal tensor resolution.
+
 A lightweight synthetic example is included at `examples/sample_output/`. It exists so the export/report path can be checked without downloading VGGT weights.
 
 ## Colab setup
@@ -149,7 +151,7 @@ For a desk or small room:
 
 - Raw point clouds are the faithful output. Poisson meshes can look fuller, but they may hallucinate curved shells around sparse or noisy phone-video geometry.
 - Desk scenes are challenging because reflective monitors, thin chair legs, motion blur, and textureless flat surfaces are difficult for dense reconstruction.
-- The next major upgrade is open-vocabulary 3D querying: preserve source frame/pixel indices, sample CLIP patch features, and let users type queries like `blue mug` or `notebook` to highlight matching 3D points.
+- The next major upgrade is open-vocabulary 3D querying: use the exported source frame/pixel indices, sample CLIP patch features, and let users type queries like `blue mug` or `notebook` to highlight matching 3D points.
 - Another strong upgrade is exporting VGGT cameras to a Gaussian Splatting pipeline for a more photorealistic visual representation.
 
 ## Useful options

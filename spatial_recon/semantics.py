@@ -54,6 +54,8 @@ def run_semantics(
     if not image_paths:
         raise ValueError(f"No images found in {image_dir}")
 
+    segment_device = _device_index(device)
+    print(f"[Semantics] Using {'cuda:0' if segment_device == 0 else 'cpu'} for segmentation")
     out_dir = ensure_dir(out_dir)
     masks_dir = ensure_dir(out_dir / "label_maps")
     previews_dir = ensure_dir(out_dir / "previews")
@@ -61,7 +63,7 @@ def run_semantics(
     segmenter = pipeline(
         "image-segmentation",
         model=model_name,
-        device=_device_index(device),
+        device=segment_device,
     )
 
     label_to_id = {"unknown": 0}

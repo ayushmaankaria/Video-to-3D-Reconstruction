@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from spatial_recon.export import write_glb, write_html_viewer, write_legend, write_ply
+from spatial_recon.export import write_cloud_npz, write_glb, write_html_viewer, write_legend, write_ply
 from spatial_recon.fusion import FusedPointCloud
 from spatial_recon.report import write_report
 from spatial_recon.utils import ensure_dir, semantic_color
@@ -48,12 +48,15 @@ def main() -> None:
         source_frame=np.zeros(len(points), dtype=np.int32),
         source_y=np.zeros(len(points), dtype=np.int32),
         source_x=np.zeros(len(points), dtype=np.int32),
+        source_y_vggt=np.zeros(len(points), dtype=np.int32),
+        source_x_vggt=np.zeros(len(points), dtype=np.int32),
     )
     write_ply(out / "reconstruction_rgb.ply", cloud)
     write_ply(out / "reconstruction_semantic.ply", cloud, semantic_colors=True)
     write_glb(out / "reconstruction_semantic.glb", cloud)
     write_html_viewer(out / "viewer.html", cloud)
     write_legend(out / "semantic_legend.json", cloud)
+    write_cloud_npz(out / "fused_points.npz", cloud)
     write_report(Path("examples/sample_output/REPORT.md"), cloud, 12, "synthetic", "sample", "sample")
     print(f"Wrote {out}")
 

@@ -17,6 +17,7 @@ def _toy_predictions() -> dict:
         "world_points_from_depth": points,
         "depth_conf": conf,
         "images": images,
+        "source_image_hw": np.asarray([[20, 30]], dtype=np.int32),
     }
 
 
@@ -50,7 +51,50 @@ class FusionTest(unittest.TestCase):
         self.assertEqual(cloud.source_frame.shape, (len(cloud.points),))
         self.assertEqual(cloud.source_y.shape, (len(cloud.points),))
         self.assertEqual(cloud.source_x.shape, (len(cloud.points),))
+        self.assertEqual(cloud.source_y_vggt.shape, (len(cloud.points),))
+        self.assertEqual(cloud.source_x_vggt.shape, (len(cloud.points),))
         self.assertTrue(np.all(cloud.source_frame == 0))
+        self.assertTrue(np.all((0 <= cloud.source_y) & (cloud.source_y < 20)))
+        self.assertTrue(np.all((0 <= cloud.source_x) & (cloud.source_x < 30)))
+        self.assertTrue(np.all((0 <= cloud.source_y_vggt) & (cloud.source_y_vggt < 2)))
+        self.assertTrue(np.all((0 <= cloud.source_x_vggt) & (cloud.source_x_vggt < 3)))
+
+    def test_nonfinite_points_are_dropped(self) -> None:
+        predictions = _toy_predictions()
+        predictions["world_points_from_depth"] = predictions["world_points_from_depth"].copy()
+        predictions["world_points_from_depth"][0, 0, 0, 0] = np.nan
+
+        cloud = fuse_predictions(
+            predictions,
+            label_maps=[np.ones((2, 3), dtype=np.int32)],
+            labels={1: "desk"},
+            conf_percentile=0,
+            sample_stride=1,
+            voxel_size=0,
+            max_points=100,
+        )
+
+        self.assertEqual(len(cloud.points), 5)
+        self.assertTrue(np.isfinite(cloud.points).all())
+
+    def test_voxel_reduce_collapses_identical_points(self) -> None:
+        predictions = {
+            "world_points_from_depth": np.zeros((1, 1, 2, 3), dtype=np.float32),
+            "depth_conf": np.ones((1, 1, 2), dtype=np.float32),
+            "images": np.ones((1, 3, 1, 2), dtype=np.float32),
+            "source_image_hw": np.asarray([[10, 20]], dtype=np.int32),
+        }
+        cloud = fuse_predictions(
+            predictions,
+            label_maps=[np.asarray([[1, 1]], dtype=np.int32)],
+            labels={1: "desk"},
+            conf_percentile=0,
+            sample_stride=1,
+            voxel_size=0.01,
+            max_points=100,
+        )
+
+        self.assertEqual(len(cloud.points), 1)
 
 
 if __name__ == "__main__":

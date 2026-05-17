@@ -18,6 +18,8 @@ class FusedPointCloud:
     source_frame: np.ndarray
     source_y: np.ndarray
     source_x: np.ndarray
+    source_y_vggt: np.ndarray
+    source_x_vggt: np.ndarray
 
 
 def _prediction_points(predictions: dict, use_point_map: bool) -> tuple[np.ndarray, np.ndarray]:
@@ -34,10 +36,12 @@ def _voxel_reduce(
     source_frame: np.ndarray,
     source_y: np.ndarray,
     source_x: np.ndarray,
+    source_y_vggt: np.ndarray,
+    source_x_vggt: np.ndarray,
     voxel_size: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if voxel_size <= 0 or len(points) == 0:
-        return points, colors, labels, conf, source_frame, source_y, source_x
+        return points, colors, labels, conf, source_frame, source_y, source_x, source_y_vggt, source_x_vggt
 
     keys = np.floor(points / voxel_size).astype(np.int64)
     _, inverse = np.unique(keys, axis=0, return_inverse=True)
@@ -51,22 +55,16 @@ def _voxel_reduce(
     np.add.at(color_sums, inverse, colors.astype(np.float64))
     np.add.at(conf_sums, inverse, conf)
 
-    voxel_label = np.zeros(n, dtype=np.int32)
-    for voxel_id in range(n):
-        voxel_labels = labels[inverse == voxel_id]
-        if len(voxel_labels):
-            voxel_label[voxel_id] = int(np.bincount(voxel_labels.astype(np.int64)).argmax())
+    label_ids = labels.astype(np.int64)
+    n_labels = int(label_ids.max(initial=0)) + 1
+    votes = np.zeros((n, n_labels), dtype=np.int32)
+    np.add.at(votes, (inverse, label_ids), 1)
+    voxel_label = votes.argmax(axis=1).astype(np.int32)
 
+    order = np.argsort(-conf, kind="stable")
+    unique_voxels, first = np.unique(inverse[order], return_index=True)
     representative = np.zeros(n, dtype=np.int64)
-    order = np.argsort(-conf)
-    seen: set[int] = set()
-    for idx in order:
-        voxel_id = int(inverse[idx])
-        if voxel_id not in seen:
-            representative[voxel_id] = int(idx)
-            seen.add(voxel_id)
-            if len(seen) == n:
-                break
+    representative[unique_voxels] = order[first]
 
     return (
         (sums / counts[:, None]).astype(np.float32),
@@ -76,7 +74,31 @@ def _voxel_reduce(
         source_frame[representative].astype(np.int32),
         source_y[representative].astype(np.int32),
         source_x[representative].astype(np.int32),
+        source_y_vggt[representative].astype(np.int32),
+        source_x_vggt[representative].astype(np.int32),
     )
+
+
+def _original_pixel_indices(
+    predictions: dict,
+    source_frame: np.ndarray,
+    source_y_vggt: np.ndarray,
+    source_x_vggt: np.ndarray,
+    points_hw: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray]:
+    h, w = points_hw
+    source_image_hw = np.asarray(predictions.get("source_image_hw", []))
+    if source_image_hw.ndim != 2 or source_image_hw.shape[1] != 2 or source_image_hw.shape[0] <= int(source_frame.max(initial=0)):
+        return source_y_vggt.copy(), source_x_vggt.copy()
+
+    frame_hw = source_image_hw[source_frame]
+    scale_y = frame_hw[:, 0] / float(h)
+    scale_x = frame_hw[:, 1] / float(w)
+    source_y = np.rint((source_y_vggt + 0.5) * scale_y - 0.5).astype(np.int32)
+    source_x = np.rint((source_x_vggt + 0.5) * scale_x - 0.5).astype(np.int32)
+    source_y = np.clip(source_y, 0, frame_hw[:, 0] - 1)
+    source_x = np.clip(source_x, 0, frame_hw[:, 1] - 1)
+    return source_y.astype(np.int32), source_x.astype(np.int32)
 
 
 def fuse_predictions(
@@ -104,8 +126,11 @@ def fuse_predictions(
     colors = normalize_uint8(images[:, ::stride, ::stride, :]).reshape(-1, 3)
     frame_grid, y_grid, x_grid = np.indices(points_map.shape[:3])
     source_frame = frame_grid[:, ::stride, ::stride].reshape(-1).astype(np.int32)
-    source_y = y_grid[:, ::stride, ::stride].reshape(-1).astype(np.int32)
-    source_x = x_grid[:, ::stride, ::stride].reshape(-1).astype(np.int32)
+    source_y_vggt = y_grid[:, ::stride, ::stride].reshape(-1).astype(np.int32)
+    source_x_vggt = x_grid[:, ::stride, ::stride].reshape(-1).astype(np.int32)
+    source_y, source_x = _original_pixel_indices(
+        predictions, source_frame, source_y_vggt, source_x_vggt, points_map.shape[1:3]
+    )
 
     semantic_ids = np.zeros(len(points), dtype=np.int32)
     if label_maps:
@@ -127,6 +152,8 @@ def fuse_predictions(
     source_frame = source_frame[keep]
     source_y = source_y[keep]
     source_x = source_x[keep]
+    source_y_vggt = source_y_vggt[keep]
+    source_x_vggt = source_x_vggt[keep]
 
     if len(points) > 20:
         center = np.median(points, axis=0)
@@ -134,9 +161,10 @@ def fuse_predictions(
         keep_radius = radius <= np.percentile(radius, 99.5)
         points, colors, semantic_ids, conf = points[keep_radius], colors[keep_radius], semantic_ids[keep_radius], conf[keep_radius]
         source_frame, source_y, source_x = source_frame[keep_radius], source_y[keep_radius], source_x[keep_radius]
+        source_y_vggt, source_x_vggt = source_y_vggt[keep_radius], source_x_vggt[keep_radius]
 
-    points, colors, semantic_ids, conf, source_frame, source_y, source_x = _voxel_reduce(
-        points, colors, semantic_ids, conf, source_frame, source_y, source_x, voxel_size
+    points, colors, semantic_ids, conf, source_frame, source_y, source_x, source_y_vggt, source_x_vggt = _voxel_reduce(
+        points, colors, semantic_ids, conf, source_frame, source_y, source_x, source_y_vggt, source_x_vggt, voxel_size
     )
 
     if len(points) > max_points:
@@ -144,6 +172,7 @@ def fuse_predictions(
         idx = rng.choice(len(points), size=max_points, replace=False)
         points, colors, semantic_ids, conf = points[idx], colors[idx], semantic_ids[idx], conf[idx]
         source_frame, source_y, source_x = source_frame[idx], source_y[idx], source_x[idx]
+        source_y_vggt, source_x_vggt = source_y_vggt[idx], source_x_vggt[idx]
 
     labels = labels or {0: "unknown"}
     semantic_colors = np.asarray([semantic_color(int(label_id)) for label_id in semantic_ids], dtype=np.uint8)
@@ -157,4 +186,6 @@ def fuse_predictions(
         source_frame=source_frame.astype(np.int32),
         source_y=source_y.astype(np.int32),
         source_x=source_x.astype(np.int32),
+        source_y_vggt=source_y_vggt.astype(np.int32),
+        source_x_vggt=source_x_vggt.astype(np.int32),
     )
