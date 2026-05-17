@@ -38,6 +38,14 @@ def write_report(
         f"- Semantic model: `{semantic_model or 'disabled'}`",
         f"- Exported points: `{len(cloud.points)}`",
         "",
+        "## Quality stats",
+        "",
+        f"- Mean confidence: `{float(np.mean(cloud.confidence)):.4f}`",
+        f"- Median confidence: `{float(np.median(cloud.confidence)):.4f}`",
+        f"- Bounding box min: `{np.min(cloud.points, axis=0).round(4).tolist()}`",
+        f"- Bounding box max: `{np.max(cloud.points, axis=0).round(4).tolist()}`",
+        f"- Semantic classes present: `{len(set(int(x) for x in cloud.semantic_ids.tolist()))}`",
+        "",
         "## Semantic inventory",
         "",
     ]
@@ -55,7 +63,8 @@ def write_report(
             "- VGGT predicts camera poses, depth, point maps, and confidence in one feed-forward pass.",
             "- 2D semantic masks are projected at the same pixels used for 3D unprojection, so labels remain locked to the reconstructed geometry.",
             "- Confidence percentile filtering, radius trimming, and voxel fusion reduce floating outliers while keeping object-level structure visible.",
-            "- The output includes both RGB geometry and semantic-color point clouds for easy inspection.",
+            "- Voxel fusion uses majority-vote semantic labels for stability while preserving the highest-confidence source pixel for traceability.",
+            "- The output includes both RGB geometry and semantic-color point clouds, plus source frame/pixel indices for future open-vocabulary querying.",
         ]
     )
     if command:
@@ -63,4 +72,3 @@ def write_report(
 
     path.write_text("\n".join(lines) + "\n")
     return path
-

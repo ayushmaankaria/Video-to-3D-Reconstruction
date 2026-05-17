@@ -60,7 +60,44 @@ def write_legend(path: str | Path, cloud: FusedPointCloud) -> Path:
     return Path(path)
 
 
-def write_html_viewer(path: str | Path, cloud: FusedPointCloud, max_points: int = 80_000) -> Path:
+def write_cloud_npz(path: str | Path, cloud: FusedPointCloud) -> Path:
+    path = Path(path)
+    ensure_dir(path.parent)
+    np.savez_compressed(
+        path,
+        points=cloud.points,
+        colors_rgb=cloud.colors_rgb,
+        semantic_ids=cloud.semantic_ids,
+        semantic_colors=cloud.semantic_colors,
+        confidence=cloud.confidence,
+        source_frame=cloud.source_frame,
+        source_y=cloud.source_y,
+        source_x=cloud.source_x,
+        label_ids=np.asarray(sorted(cloud.labels), dtype=np.int32),
+        label_names=np.asarray([cloud.labels[k] for k in sorted(cloud.labels)], dtype=object),
+    )
+    return path
+
+
+def _camera_centers(extrinsic: np.ndarray | None) -> np.ndarray | None:
+    if extrinsic is None:
+        return None
+    extrinsic = np.asarray(extrinsic)
+    if extrinsic.ndim == 4:
+        extrinsic = extrinsic.squeeze(0)
+    if extrinsic.ndim != 3 or extrinsic.shape[1:] != (3, 4):
+        return None
+    rotation = extrinsic[:, :, :3]
+    translation = extrinsic[:, :, 3]
+    return -np.einsum("nij,nj->ni", np.transpose(rotation, (0, 2, 1)), translation)
+
+
+def write_html_viewer(
+    path: str | Path,
+    cloud: FusedPointCloud,
+    max_points: int = 80_000,
+    extrinsic: np.ndarray | None = None,
+) -> Path:
     path = Path(path)
     ensure_dir(path.parent)
     n = len(cloud.points)
@@ -76,23 +113,39 @@ def write_html_viewer(path: str | Path, cloud: FusedPointCloud, max_points: int 
         pts = cloud.points[idx]
         colors = [f"rgb({r},{g},{b})" for r, g, b in cloud.semantic_colors[idx]]
         names = [cloud.labels.get(int(label_id), "unknown") for label_id in cloud.semantic_ids[idx]]
-        fig = go.Figure(
-            data=[
+        traces = [
+            go.Scatter3d(
+                x=pts[:, 0],
+                y=pts[:, 1],
+                z=pts[:, 2],
+                mode="markers",
+                marker={"size": 1.5, "color": colors},
+                text=names,
+                hovertemplate="%{text}<extra></extra>",
+                name="semantic points",
+            )
+        ]
+        cameras = _camera_centers(extrinsic)
+        if cameras is not None and len(cameras):
+            traces.append(
                 go.Scatter3d(
-                    x=pts[:, 0],
-                    y=pts[:, 1],
-                    z=pts[:, 2],
-                    mode="markers",
-                    marker={"size": 1.5, "color": colors},
-                    text=names,
-                    hovertemplate="%{text}<extra></extra>",
+                    x=cameras[:, 0],
+                    y=cameras[:, 1],
+                    z=cameras[:, 2],
+                    mode="lines+markers",
+                    marker={"size": 4, "color": "black", "symbol": "diamond"},
+                    line={"width": 4, "color": "black"},
+                    name="camera trajectory",
+                    hovertemplate="camera %{text}<extra></extra>",
+                    text=[str(i) for i in range(len(cameras))],
                 )
-            ]
-        )
+            )
+        fig = go.Figure(data=traces)
         fig.update_layout(
             title="Semantic VGGT Reconstruction",
             scene={"aspectmode": "data"},
             margin={"l": 0, "r": 0, "t": 40, "b": 0},
+            legend={"orientation": "h"},
         )
         fig.write_html(path, include_plotlyjs="cdn")
     except ImportError:
@@ -101,4 +154,3 @@ def write_html_viewer(path: str | Path, cloud: FusedPointCloud, max_points: int 
             "<p>Install plotly to generate the interactive viewer.</p></body></html>\n"
         )
     return path
-

@@ -15,6 +15,9 @@ class FusedPointCloud:
     semantic_colors: np.ndarray
     confidence: np.ndarray
     labels: dict[int, str]
+    source_frame: np.ndarray
+    source_y: np.ndarray
+    source_x: np.ndarray
 
 
 def _prediction_points(predictions: dict, use_point_map: bool) -> tuple[np.ndarray, np.ndarray]:
@@ -28,10 +31,13 @@ def _voxel_reduce(
     colors: np.ndarray,
     labels: np.ndarray,
     conf: np.ndarray,
+    source_frame: np.ndarray,
+    source_y: np.ndarray,
+    source_x: np.ndarray,
     voxel_size: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     if voxel_size <= 0 or len(points) == 0:
-        return points, colors, labels, conf
+        return points, colors, labels, conf, source_frame, source_y, source_x
 
     keys = np.floor(points / voxel_size).astype(np.int64)
     _, inverse = np.unique(keys, axis=0, return_inverse=True)
@@ -45,16 +51,31 @@ def _voxel_reduce(
     np.add.at(color_sums, inverse, colors.astype(np.float64))
     np.add.at(conf_sums, inverse, conf)
 
+    voxel_label = np.zeros(n, dtype=np.int32)
+    for voxel_id in range(n):
+        voxel_labels = labels[inverse == voxel_id]
+        if len(voxel_labels):
+            voxel_label[voxel_id] = int(np.bincount(voxel_labels.astype(np.int64)).argmax())
+
+    representative = np.zeros(n, dtype=np.int64)
     order = np.argsort(-conf)
-    _, first = np.unique(inverse[order], return_index=True)
-    representative = order[first]
-    voxel_label = labels[representative]
+    seen: set[int] = set()
+    for idx in order:
+        voxel_id = int(inverse[idx])
+        if voxel_id not in seen:
+            representative[voxel_id] = int(idx)
+            seen.add(voxel_id)
+            if len(seen) == n:
+                break
 
     return (
         (sums / counts[:, None]).astype(np.float32),
         np.clip(color_sums / counts[:, None], 0, 255).astype(np.uint8),
         voxel_label.astype(np.int32),
         (conf_sums / counts).astype(np.float32),
+        source_frame[representative].astype(np.int32),
+        source_y[representative].astype(np.int32),
+        source_x[representative].astype(np.int32),
     )
 
 
@@ -81,6 +102,10 @@ def fuse_predictions(
     points = points_map[:, ::stride, ::stride, :].reshape(-1, 3)
     conf = conf_map[:, ::stride, ::stride].reshape(-1)
     colors = normalize_uint8(images[:, ::stride, ::stride, :]).reshape(-1, 3)
+    frame_grid, y_grid, x_grid = np.indices(points_map.shape[:3])
+    source_frame = frame_grid[:, ::stride, ::stride].reshape(-1).astype(np.int32)
+    source_y = y_grid[:, ::stride, ::stride].reshape(-1).astype(np.int32)
+    source_x = x_grid[:, ::stride, ::stride].reshape(-1).astype(np.int32)
 
     semantic_ids = np.zeros(len(points), dtype=np.int32)
     if label_maps:
@@ -99,29 +124,37 @@ def fuse_predictions(
     colors = colors[keep]
     semantic_ids = semantic_ids[keep]
     conf = conf[keep]
+    source_frame = source_frame[keep]
+    source_y = source_y[keep]
+    source_x = source_x[keep]
 
     if len(points) > 20:
         center = np.median(points, axis=0)
         radius = np.linalg.norm(points - center, axis=1)
         keep_radius = radius <= np.percentile(radius, 99.5)
         points, colors, semantic_ids, conf = points[keep_radius], colors[keep_radius], semantic_ids[keep_radius], conf[keep_radius]
+        source_frame, source_y, source_x = source_frame[keep_radius], source_y[keep_radius], source_x[keep_radius]
 
-    points, colors, semantic_ids, conf = _voxel_reduce(points, colors, semantic_ids, conf, voxel_size)
+    points, colors, semantic_ids, conf, source_frame, source_y, source_x = _voxel_reduce(
+        points, colors, semantic_ids, conf, source_frame, source_y, source_x, voxel_size
+    )
 
     if len(points) > max_points:
         rng = np.random.default_rng(7)
         idx = rng.choice(len(points), size=max_points, replace=False)
         points, colors, semantic_ids, conf = points[idx], colors[idx], semantic_ids[idx], conf[idx]
+        source_frame, source_y, source_x = source_frame[idx], source_y[idx], source_x[idx]
 
     labels = labels or {0: "unknown"}
     semantic_colors = np.asarray([semantic_color(int(label_id)) for label_id in semantic_ids], dtype=np.uint8)
-    export_colors = semantic_colors if semantic_view else colors
     return FusedPointCloud(
         points=points.astype(np.float32),
-        colors_rgb=export_colors.astype(np.uint8),
+        colors_rgb=colors.astype(np.uint8),
         semantic_ids=semantic_ids.astype(np.int32),
         semantic_colors=semantic_colors,
         confidence=conf.astype(np.float32),
         labels=labels,
+        source_frame=source_frame.astype(np.int32),
+        source_y=source_y.astype(np.int32),
+        source_x=source_x.astype(np.int32),
     )
-

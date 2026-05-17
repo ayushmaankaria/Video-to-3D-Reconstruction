@@ -45,6 +45,9 @@ def main() -> None:
         semantic_colors=semantic_colors,
         confidence=np.ones(len(points), dtype=np.float32),
         labels={0: "unknown", 1: "floor", 2: "wall", 3: "desk", 4: "chair", 5: "monitor"},
+        source_frame=np.zeros(len(points), dtype=np.int32),
+        source_y=np.zeros(len(points), dtype=np.int32),
+        source_x=np.zeros(len(points), dtype=np.int32),
     )
     write_ply(out / "reconstruction_rgb.ply", cloud)
     write_ply(out / "reconstruction_semantic.ply", cloud, semantic_colors=True)

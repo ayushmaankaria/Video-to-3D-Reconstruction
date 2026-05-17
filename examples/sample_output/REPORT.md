@@ -8,6 +8,14 @@
 - Semantic model: `sample`
 - Exported points: `61800`
 
+## Quality stats
+
+- Mean confidence: `1.0000`
+- Median confidence: `1.0000`
+- Bounding box min: `[-1.399999976158142, -1.0, 0.0]`
+- Bounding box max: `[1.399999976158142, 1.0499999523162842, 1.399999976158142]`
+- Semantic classes present: `5`
+
 ## Semantic inventory
 
 - `floor`: 23400 points
@@ -22,4 +30,5 @@
 - VGGT predicts camera poses, depth, point maps, and confidence in one feed-forward pass.
 - 2D semantic masks are projected at the same pixels used for 3D unprojection, so labels remain locked to the reconstructed geometry.
 - Confidence percentile filtering, radius trimming, and voxel fusion reduce floating outliers while keeping object-level structure visible.
-- The output includes both RGB geometry and semantic-color point clouds for easy inspection.
+- Voxel fusion uses majority-vote semantic labels for stability while preserving the highest-confidence source pixel for traceability.
+- The output includes both RGB geometry and semantic-color point clouds, plus source frame/pixel indices for future open-vocabulary querying.

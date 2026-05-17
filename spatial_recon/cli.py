@@ -4,7 +4,7 @@ import argparse
 import shutil
 from pathlib import Path
 
-from .export import write_glb, write_html_viewer, write_legend, write_ply
+from .export import write_cloud_npz, write_glb, write_html_viewer, write_legend, write_ply
 from .fusion import fuse_predictions
 from .report import write_report
 from .semantics import load_label_maps, run_semantics
@@ -72,29 +72,18 @@ def run_pipeline(args: argparse.Namespace) -> None:
         voxel_size=args.voxel_size,
         max_points=args.max_points,
         use_point_map=args.use_point_map,
-        semantic_view=False,
-    )
-    semantic_cloud = fuse_predictions(
-        predictions,
-        label_maps=label_maps,
-        labels=labels,
-        conf_percentile=args.conf_percentile,
-        sample_stride=args.sample_stride,
-        voxel_size=args.voxel_size,
-        max_points=args.max_points,
-        use_point_map=args.use_point_map,
-        semantic_view=True,
     )
 
     exports = ensure_dir(out_dir / "exports")
     write_ply(exports / "reconstruction_rgb.ply", cloud)
-    write_ply(exports / "reconstruction_semantic.ply", semantic_cloud, semantic_colors=True)
-    write_glb(exports / "reconstruction_semantic.glb", semantic_cloud, semantic_colors=True)
-    write_html_viewer(exports / "viewer.html", semantic_cloud)
-    write_legend(exports / "semantic_legend.json", semantic_cloud)
+    write_ply(exports / "reconstruction_semantic.ply", cloud, semantic_colors=True)
+    write_glb(exports / "reconstruction_semantic.glb", cloud, semantic_colors=True)
+    write_html_viewer(exports / "viewer.html", cloud, extrinsic=predictions.get("extrinsic"))
+    write_legend(exports / "semantic_legend.json", cloud)
+    write_cloud_npz(exports / "fused_points.npz", cloud)
     write_report(
         out_dir / "REPORT.md",
-        semantic_cloud,
+        cloud,
         frame_count=len(image_paths),
         video_path=args.video,
         checkpoint=args.checkpoint,
@@ -144,4 +133,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

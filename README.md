@@ -17,6 +17,15 @@ Pipeline:
 5. Filter low-confidence/outlier points and voxel-fuse duplicates.
 6. Export RGB geometry, semantic geometry, a GLB, an HTML viewer, a label legend, and a run report.
 
+```text
+phone video
+  -> sharp frame sampling
+  -> VGGT camera/depth/point prediction
+  -> Mask2Former 2D semantic segmentation
+  -> pixel-aligned 3D semantic fusion
+  -> RGB point cloud + semantic point cloud + viewer + report
+```
+
 ## Outputs
 
 Each run creates:
@@ -33,8 +42,9 @@ runs/desk/
     reconstruction_rgb.ply        # geometry colored by input RGB
     reconstruction_semantic.ply   # geometry colored by semantic class
     reconstruction_semantic.glb   # quick 3D viewer artifact
-    viewer.html                   # interactive point-cloud viewer
+    viewer.html                   # interactive point-cloud viewer with camera path
     semantic_legend.json
+    fused_points.npz              # reusable points, colors, labels, confidence, source pixels
   REPORT.md                       # design choices and run summary
 ```
 
@@ -132,6 +142,15 @@ For a desk or small room:
 - Mask2Former semantics: ADE20K has useful indoor classes such as wall, floor, table, chair, cabinet, shelf, desk, and monitor. It is zero-shot enough for a desk scene and easy to run in Colab.
 - Pixel-aligned semantic projection: semantics are sampled at each unprojected pixel, which prioritizes 3D/2D alignment over class-level smoothness.
 - Confidence filtering: the default removes the lowest 35 percent of VGGT confidence values, trims far outliers, and voxel-fuses nearby points. This usually makes phone-video reconstructions cleaner while preserving scene layout.
+- Majority-vote voxel labels: nearby points are merged spatially, and each voxel receives the most common semantic class inside it. This is less noisy than simply taking the highest-confidence point label.
+- Camera trajectory: the HTML viewer overlays predicted camera positions, making it easier to understand how the phone moved and where the reconstruction came from.
+
+## Limitations and next steps
+
+- Raw point clouds are the faithful output. Poisson meshes can look fuller, but they may hallucinate curved shells around sparse or noisy phone-video geometry.
+- Desk scenes are challenging because reflective monitors, thin chair legs, motion blur, and textureless flat surfaces are difficult for dense reconstruction.
+- The next major upgrade is open-vocabulary 3D querying: preserve source frame/pixel indices, sample CLIP patch features, and let users type queries like `blue mug` or `notebook` to highlight matching 3D points.
+- Another strong upgrade is exporting VGGT cameras to a Gaussian Splatting pipeline for a more photorealistic visual representation.
 
 ## Useful options
 
@@ -147,6 +166,9 @@ python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" 
 
 # Use VGGT's point-map branch instead of depth unprojection
 python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" --out runs/pointmap --use-point-map
+
+# Run lightweight deterministic fusion tests
+python -m unittest tests/test_fusion.py
 ```
 
 ## References
