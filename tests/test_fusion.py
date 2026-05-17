@@ -96,6 +96,29 @@ class FusionTest(unittest.TestCase):
 
         self.assertEqual(len(cloud.points), 1)
 
+    def test_numpy_unique_inverse_is_flattened_before_voting(self) -> None:
+        predictions = {
+            "world_points_from_depth": np.asarray(
+                [[[[0.0, 0.0, 0.0], [0.02, 0.0, 0.0], [0.04, 0.0, 0.0]]]],
+                dtype=np.float32,
+            ),
+            "depth_conf": np.ones((1, 1, 3), dtype=np.float32),
+            "images": np.ones((1, 3, 1, 3), dtype=np.float32),
+            "source_image_hw": np.asarray([[10, 30]], dtype=np.int32),
+        }
+        cloud = fuse_predictions(
+            predictions,
+            label_maps=[np.asarray([[5, 1000, 5]], dtype=np.int32)],
+            labels={5: "desk", 1000: "rare_large_label"},
+            conf_percentile=0,
+            sample_stride=1,
+            voxel_size=0.005,
+            max_points=100,
+        )
+
+        self.assertEqual(len(cloud.points), 3)
+        self.assertEqual(sorted(cloud.semantic_ids.tolist()), [5, 5, 1000])
+
 
 if __name__ == "__main__":
     unittest.main()

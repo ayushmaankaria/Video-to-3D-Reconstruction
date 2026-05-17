@@ -95,6 +95,19 @@ def run_pipeline(args: argparse.Namespace) -> None:
     print(f"Report: {out_dir / 'REPORT.md'}")
 
 
+def run_query(args: argparse.Namespace) -> None:
+    from .query import query_cloud
+
+    query_cloud(
+        args.run,
+        args.text,
+        out_ply=args.out,
+        topk_percent=args.topk_percent,
+        device=args.device,
+        model_name=args.query_model,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="VGGT video-to-3D reconstruction with semantic point projection.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -119,6 +132,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--overwrite-predictions", action="store_true")
     run.add_argument("--overwrite-semantics", action="store_true")
     run.set_defaults(func=run_pipeline)
+
+    query = sub.add_parser("query", help="Open-vocabulary query over a fused 3D scene.")
+    query.add_argument("--run", type=str, required=True, help="Run directory containing frames/ and exports/fused_points.npz.")
+    query.add_argument("--text", type=str, required=True, help="Text query, e.g. 'monitor' or 'blue mug'.")
+    query.add_argument("--out", type=str, default=None, help="Output highlighted PLY path.")
+    query.add_argument("--topk-percent", type=float, default=10.0, help="Percentage of points to highlight.")
+    query.add_argument("--device", type=str, default="auto")
+    query.add_argument("--query-model", type=str, default="CIDAS/clipseg-rd64-refined")
+    query.set_defaults(func=run_query)
 
     return parser
 

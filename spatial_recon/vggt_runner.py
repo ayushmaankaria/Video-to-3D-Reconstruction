@@ -26,7 +26,7 @@ def _autocast_context(device: str):
 
     if device == "cuda":
         dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
-        return torch.cuda.amp.autocast(dtype=dtype)
+        return torch.amp.autocast("cuda", dtype=dtype)
     if device == "mps":
         return torch.autocast(device_type="mps", dtype=torch.float16)
     return nullcontext()

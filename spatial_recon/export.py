@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from .fusion import FusedPointCloud
-from .utils import ensure_dir, write_json
+from .utils import ensure_dir, semantic_color, write_json
 
 
 def write_ply(path: str | Path, cloud: FusedPointCloud, semantic_colors: bool = False) -> Path:
@@ -49,9 +49,7 @@ def write_legend(path: str | Path, cloud: FusedPointCloud) -> Path:
     payload = {
         str(label_id): {
             "name": cloud.labels.get(label_id, "unknown"),
-            "color_rgb": cloud.semantic_colors[np.where(cloud.semantic_ids == label_id)[0][0]].tolist()
-            if np.any(cloud.semantic_ids == label_id)
-            else [160, 160, 160],
+            "color_rgb": list(semantic_color(label_id)),
             "points": int(np.sum(cloud.semantic_ids == label_id)),
         }
         for label_id in used_ids

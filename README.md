@@ -1,27 +1,36 @@
 # Semantic VGGT Reconstruction
 
-This system takes a short phone video of a small indoor scene, samples useful frames, reconstructs geometry with Meta's VGGT, projects semantic masks into 3D, and exports RGB and semantic point clouds for inspection.
+Phone video to a semantically labeled, searchable 3D scene using Meta VGGT, Mask2Former, and CLIPSeg.
 
-## Why this approach
+<!-- Add final result GIF here before submission. Suggested path: docs/desk_reconstruction.gif -->
 
-VGGT is a strong fit for the challenge because it predicts camera poses, intrinsics, depth maps, point maps, and confidence directly from multiple views. I use those dense per-pixel outputs as the geometric backbone, then attach semantic labels at the same pixels before fusion. The result is simple: every semantic point came from a real VGGT 3D point, so labels stay aligned with geometry instead of being pasted on afterward.
+```bash
+git clone https://github.com/ayushmaankaria/Video-to-3D-Reconstruction.git
+cd Video-to-3D-Reconstruction
+pip install -r requirements-colab.txt
+```
 
-Pipeline:
+```bash
+python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" --out runs/desk --checkpoint facebook/VGGT-1B
+python -m spatial_recon.cli query --run runs/desk --text "chair" --topk-percent 8
+```
 
-1. Extract sharp, temporally spread frames from the video.
-2. Run VGGT on the selected frames.
-3. Segment each frame with Mask2Former ADE20K semantics.
-4. Project semantic labels onto VGGT's 3D points.
-5. Filter low-confidence/outlier points and voxel-fuse duplicates.
-6. Export RGB geometry, semantic geometry, a GLB, an HTML viewer, a label legend, and a run report.
+Open `runs/desk/exports/viewer.html`, or load the `.ply` outputs in MeshLab/CloudCompare.
+
+## What It Does
+
+This project reconstructs a small indoor area from a phone video, assigns semantic labels to the reconstructed 3D points, and lets users run open-vocabulary text queries such as `chair`, `screen`, `keyboard`, or `blue mug` to highlight matching 3D regions.
+
+The core idea is pixel-aligned fusion: VGGT predicts dense 3D geometry for each frame, Mask2Former predicts 2D semantic masks for each frame, and the system transfers labels through the same pixels used to create the 3D points. That keeps semantic predictions tied to the underlying geometry instead of being pasted on afterward.
 
 ```text
 phone video
   -> sharp frame sampling
   -> VGGT camera/depth/point prediction
   -> Mask2Former 2D semantic segmentation
-  -> pixel-aligned 3D semantic fusion
-  -> RGB point cloud + semantic point cloud + viewer + report
+  -> confidence filtering + voxel fusion
+  -> RGB point cloud + semantic point cloud + camera trajectory viewer
+  -> optional CLIPSeg text query over 3D points
 ```
 
 ## Outputs
@@ -40,31 +49,17 @@ runs/desk/
     reconstruction_rgb.ply        # geometry colored by input RGB
     reconstruction_semantic.ply   # geometry colored by semantic class
     reconstruction_semantic.glb   # quick 3D viewer artifact
-    viewer.html                   # interactive point-cloud viewer with camera path
+    viewer.html                   # interactive point cloud with camera path
     semantic_legend.json
-    fused_points.npz              # reusable points, colors, labels, confidence, source pixels
-  REPORT.md                       # design choices and run summary
+    fused_points.npz              # points, labels, confidence, source pixels
+  REPORT.md                       # run summary, quality stats, design notes
 ```
 
-`fused_points.npz` stores both original saved-frame pixel provenance (`source_y`, `source_x`) and VGGT-resolution pixel provenance (`source_y_vggt`, `source_x_vggt`). That distinction matters for future CLIP querying because image patches should be sampled from the saved frame resolution, not blindly from VGGT's internal tensor resolution.
+`fused_points.npz` stores both original saved-frame pixel provenance (`source_y`, `source_x`) and VGGT-resolution pixel provenance (`source_y_vggt`, `source_x_vggt`). That distinction matters for CLIP querying because image patches/heatmaps should be sampled from the saved frame resolution, not blindly from VGGT's internal tensor resolution.
 
-A lightweight synthetic example is included at `examples/sample_output/`. It exists so the export/report path can be checked without downloading VGGT weights.
+## Colab Workflow
 
-## Colab setup
-
-Colab with a T4/A100/L4 GPU is recommended. My M4 MacBook Air can run the preprocessing and viewer pieces, but VGGT-1B is much more practical on CUDA.
-
-```bash
-git clone https://github.com/ayushmaankaria/Video-to-3D-Reconstruction.git
-cd Video-to-3D-Reconstruction
-pip install -r requirements-colab.txt
-```
-
-Use `requirements-colab.txt` in Colab because Colab already includes CUDA-enabled PyTorch. Installing the full local `requirements.txt` can waste a lot of time by trying to resolve or reinstall large Torch wheels.
-
-The input video is intentionally not committed to GitHub because phone videos are usually too large for a normal repository. In Colab, keep the video in Google Drive or upload it during the session, then point `--video` at that local Colab path.
-
-Example with Google Drive:
+Use an L4 or A100 GPU. The input video is intentionally not committed to GitHub because phone videos are usually too large for a normal repository. Put the video in Google Drive, then set the `--video` path.
 
 ```bash
 python -m spatial_recon.cli run \
@@ -77,102 +72,86 @@ python -m spatial_recon.cli run \
   --voxel-size 0.015
 ```
 
-If you want the commercial-use VGGT checkpoint, request access from the model page and use:
+For a denser final pass:
 
 ```bash
 python -m spatial_recon.cli run \
   --video "/content/drive/MyDrive/desk_video.mp4" \
-  --out runs/desk \
-  --checkpoint facebook/VGGT-1B-Commercial \
-  --max-frames 24
-```
-
-For normal research/demo use:
-
-```bash
-python -m spatial_recon.cli run \
-  --video "/content/drive/MyDrive/desk_video.mp4" \
-  --out runs/desk \
+  --out runs/desk_hq \
   --checkpoint facebook/VGGT-1B \
-  --max-frames 24 \
-  --conf-percentile 35 \
-  --sample-stride 2 \
-  --voxel-size 0.015
+  --max-frames 32 \
+  --conf-percentile 45 \
+  --sample-stride 1 \
+  --voxel-size 0.008 \
+  --max-points 900000 \
+  --overwrite-frames \
+  --overwrite-predictions \
+  --overwrite-semantics
 ```
 
-Open `runs/desk/exports/viewer.html` to inspect the semantic reconstruction. The `.ply` files can also be opened in MeshLab, CloudCompare, Blender, or Open3D tooling.
+If you want the commercial-use VGGT checkpoint, request access from the model page and replace the checkpoint with `facebook/VGGT-1B-Commercial`.
 
-## Gradio demo
+## Open-Vocabulary Querying
 
-For a simple upload-and-view interface:
+After reconstruction:
 
 ```bash
-python -m spatial_recon.app
+python -m spatial_recon.cli query \
+  --run runs/desk \
+  --text "screen" \
+  --topk-percent 8
 ```
 
-This still runs the same pipeline and writes outputs under `runs/gradio_desk/`.
+This writes `runs/desk/exports/query_screen.ply`, where the top-scoring query matches are painted red and all other points are muted gray. The query path uses CLIPSeg heatmaps on the original saved frames, then samples those heatmaps using each 3D point's source frame and pixel.
 
-## Synthetic sanity check
+## Design Choices
 
-This does not use VGGT. It only verifies exporters and report generation.
+- VGGT over classical SfM: VGGT directly predicts camera pose, intrinsics, depth, point maps, and confidence from multiple images, making the pipeline compact and robust for a short internship challenge.
+- Point cloud as the primary output: raw points preserve VGGT's geometry directly. Poisson meshes can look fuller, but they can also hallucinate curved shells around sparse/noisy phone-video geometry.
+- Pixel-aligned semantics: labels are sampled at the same pixels used for 3D unprojection, keeping semantics aligned with geometry.
+- Majority-vote voxel labels: nearby points are merged spatially, and each voxel receives the most common semantic class inside it.
+- Camera trajectory: the HTML viewer overlays predicted camera positions so reviewers can see how the phone moved through the scene.
+
+## Limitations
+
+- Desk scenes are challenging because reflective displays, thin chair legs, motion blur, and textureless flat surfaces are difficult for dense reconstruction.
+- Mask2Former ADE20K labels are useful for broad indoor categories such as walls, floors, tables, chairs, shelves, cabinets, and screens/displays, but they are not object-instance labels.
+- Open-vocabulary querying currently uses CLIPSeg heatmaps sampled at source pixels. A deeper version would cache dense CLIP/MaskCLIP features per frame and support faster repeated queries.
+- A Gaussian Splatting visualization path would likely produce a more photorealistic result than point-cloud rendering.
+
+## Recording Tips
+
+- Record 10-25 seconds at normal walking speed.
+- Move laterally as well as rotating; pure rotation gives weaker geometry.
+- Keep the scene static and avoid reflective screens dominating the frame.
+- Capture overlapping views of object boundaries: chair legs, desk edges, screen, walls, floor.
+- Use 16-32 frames for a first run; increase only if the scene is sparse or large.
+
+## Local Checks
+
+Synthetic exporter sanity check:
 
 ```bash
 python scripts/create_sample_scene.py
 ```
 
-Then open:
-
-```text
-examples/sample_output/exports/viewer.html
-```
-
-## Recording tips
-
-For a desk or small room:
-
-- Record 10-25 seconds at normal walking speed.
-- Move laterally as well as rotating; pure rotation gives weaker geometry.
-- Keep the scene static and avoid reflective screens dominating the frame.
-- Capture overlapping views of object boundaries: chair legs, desk edges, monitor, walls, floor.
-- Use 16-32 frames for a first run; increase if the scene is sparse or large.
-
-## Design tradeoffs
-
-- Point cloud over mesh: VGGT gives dense geometry quickly, and a point cloud keeps the submission robust without a fragile meshing step. A mesh or Gaussian splat can be added from the exported COLMAP-style cameras later.
-- Mask2Former semantics: ADE20K has useful indoor classes such as wall, floor, table, chair, cabinet, shelf, desk, and monitor. It is zero-shot enough for a desk scene and easy to run in Colab.
-- Pixel-aligned semantic projection: semantics are sampled at each unprojected pixel, which prioritizes 3D/2D alignment over class-level smoothness.
-- Confidence filtering: the default removes the lowest 35 percent of VGGT confidence values, trims far outliers, and voxel-fuses nearby points. This usually makes phone-video reconstructions cleaner while preserving scene layout.
-- Majority-vote voxel labels: nearby points are merged spatially, and each voxel receives the most common semantic class inside it. This is less noisy than simply taking the highest-confidence point label.
-- Camera trajectory: the HTML viewer overlays predicted camera positions, making it easier to understand how the phone moved and where the reconstruction came from.
-
-## Limitations and next steps
-
-- Raw point clouds are the faithful output. Poisson meshes can look fuller, but they may hallucinate curved shells around sparse or noisy phone-video geometry.
-- Desk scenes are challenging because reflective monitors, thin chair legs, motion blur, and textureless flat surfaces are difficult for dense reconstruction.
-- The next major upgrade is open-vocabulary 3D querying: use the exported source frame/pixel indices, sample CLIP patch features, and let users type queries like `blue mug` or `notebook` to highlight matching 3D points.
-- Another strong upgrade is exporting VGGT cameras to a Gaussian Splatting pipeline for a more photorealistic visual representation.
-
-## Useful options
+Deterministic fusion tests:
 
 ```bash
-# Use an existing frame folder instead of a video
-python -m spatial_recon.cli run --images-dir data/desk_frames --out runs/desk_frames
-
-# More detailed point cloud, slower viewer
-python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" --out runs/dense --sample-stride 1 --max-points 900000
-
-# Geometry only
-python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" --out runs/no_semantics --no-semantics
-
-# Use VGGT's point-map branch instead of depth unprojection
-python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" --out runs/pointmap --use-point-map
-
-# Run lightweight deterministic fusion tests
 python -m unittest tests/test_fusion.py
 ```
+
+## Optional Gradio Demo
+
+```bash
+python -m spatial_recon.app
+```
+
+This runs the same pipeline and writes outputs under `runs/gradio_desk/`.
 
 ## References
 
 - Meta VGGT repository: https://github.com/facebookresearch/vggt
 - VGGT project page: https://vgg-t.github.io/
 - Mask2Former ADE20K model: https://huggingface.co/facebook/mask2former-swin-large-ade-semantic
+- CLIPSeg model: https://huggingface.co/CIDAS/clipseg-rd64-refined

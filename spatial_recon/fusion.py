@@ -45,6 +45,7 @@ def _voxel_reduce(
 
     keys = np.floor(points / voxel_size).astype(np.int64)
     _, inverse = np.unique(keys, axis=0, return_inverse=True)
+    inverse = np.asarray(inverse).reshape(-1)
     n = int(inverse.max()) + 1
 
     sums = np.zeros((n, 3), dtype=np.float64)
@@ -55,16 +56,14 @@ def _voxel_reduce(
     np.add.at(color_sums, inverse, colors.astype(np.float64))
     np.add.at(conf_sums, inverse, conf)
 
-    label_ids = labels.astype(np.int64)
-    n_labels = int(label_ids.max(initial=0)) + 1
-    votes = np.zeros((n, n_labels), dtype=np.int32)
-    np.add.at(votes, (inverse, label_ids), 1)
-    voxel_label = votes.argmax(axis=1).astype(np.int32)
+    unique_labels, compressed_labels = np.unique(labels.astype(np.int64), return_inverse=True)
+    votes = np.zeros((n, len(unique_labels)), dtype=np.int32)
+    np.add.at(votes, (inverse, compressed_labels), 1)
+    voxel_label = unique_labels[votes.argmax(axis=1)].astype(np.int32)
 
     order = np.argsort(-conf, kind="stable")
-    unique_voxels, first = np.unique(inverse[order], return_index=True)
-    representative = np.zeros(n, dtype=np.int64)
-    representative[unique_voxels] = order[first]
+    _, first = np.unique(inverse[order], return_index=True)
+    representative = order[first]
 
     return (
         (sums / counts[:, None]).astype(np.float32),
@@ -110,7 +109,6 @@ def fuse_predictions(
     voxel_size: float = 0.015,
     max_points: int = 450_000,
     use_point_map: bool = False,
-    semantic_view: bool = True,
 ) -> FusedPointCloud:
     points_map, conf_map = _prediction_points(predictions, use_point_map=use_point_map)
     images = predictions["images"]
