@@ -45,16 +45,31 @@ A lightweight synthetic example is included at `examples/sample_output/`. It exi
 Colab with a T4/A100/L4 GPU is recommended. My M4 MacBook Air can run the preprocessing and viewer pieces, but VGGT-1B is much more practical on CUDA.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/semantic-vggt-reconstruction.git
-cd semantic-vggt-reconstruction
+git clone https://github.com/ayushmaankaria/Video-to-3D-Reconstruction.git
+cd Video-to-3D-Reconstruction
 pip install -r requirements.txt
+```
+
+The input video is intentionally not committed to GitHub because phone videos are usually too large for a normal repository. In Colab, keep the video in Google Drive or upload it during the session, then point `--video` at that local Colab path.
+
+Example with Google Drive:
+
+```bash
+python -m spatial_recon.cli run \
+  --video "/content/drive/MyDrive/desk_video.mp4" \
+  --out runs/desk \
+  --checkpoint facebook/VGGT-1B \
+  --max-frames 24 \
+  --conf-percentile 35 \
+  --sample-stride 2 \
+  --voxel-size 0.015
 ```
 
 If you want the commercial-use VGGT checkpoint, request access from the model page and use:
 
 ```bash
 python -m spatial_recon.cli run \
-  --video data/desk_video.mp4 \
+  --video "/content/drive/MyDrive/desk_video.mp4" \
   --out runs/desk \
   --checkpoint facebook/VGGT-1B-Commercial \
   --max-frames 24
@@ -64,7 +79,7 @@ For normal research/demo use:
 
 ```bash
 python -m spatial_recon.cli run \
-  --video data/desk_video.mp4 \
+  --video "/content/drive/MyDrive/desk_video.mp4" \
   --out runs/desk \
   --checkpoint facebook/VGGT-1B \
   --max-frames 24 \
@@ -123,13 +138,13 @@ For a desk or small room:
 python -m spatial_recon.cli run --images-dir data/desk_frames --out runs/desk_frames
 
 # More detailed point cloud, slower viewer
-python -m spatial_recon.cli run --video data/desk_video.mp4 --out runs/dense --sample-stride 1 --max-points 900000
+python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" --out runs/dense --sample-stride 1 --max-points 900000
 
 # Geometry only
-python -m spatial_recon.cli run --video data/desk_video.mp4 --out runs/no_semantics --no-semantics
+python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" --out runs/no_semantics --no-semantics
 
 # Use VGGT's point-map branch instead of depth unprojection
-python -m spatial_recon.cli run --video data/desk_video.mp4 --out runs/pointmap --use-point-map
+python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" --out runs/pointmap --use-point-map
 ```
 
 ## References
@@ -137,4 +152,3 @@ python -m spatial_recon.cli run --video data/desk_video.mp4 --out runs/pointmap 
 - Meta VGGT repository: https://github.com/facebookresearch/vggt
 - VGGT project page: https://vgg-t.github.io/
 - Mask2Former ADE20K model: https://huggingface.co/facebook/mask2former-swin-large-ade-semantic
-
