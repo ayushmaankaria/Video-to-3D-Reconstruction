@@ -15,13 +15,13 @@ python -m spatial_recon.cli run --video "/content/drive/MyDrive/desk_video.mp4" 
 python -m spatial_recon.cli query --run runs/desk --text "chair" --topk-percent 8
 ```
 
-Open `runs/desk/exports/viewer.html`, or load the `.ply` outputs in MeshLab/CloudCompare.
+Open `runs/desk/exports/viewer.html`, or load the `.ply` outputs in MeshLab
 
-## What It Does
+## Summary
 
-This project reconstructs a small indoor area from a phone video, assigns semantic labels to the reconstructed 3D points, and lets users run open-vocabulary text queries such as `chair`, `screen`, `keyboard`, or `blue mug` to highlight matching 3D regions.
+This project reconstructs a small indoor area from a phone video, assigns semantic labels to the reconstructed 3D points, and lets the user run open-vocabulary text queries such as `chair`, `screen`, `keyboard`, or `blue mug` to highlight matching 3D regions.
 
-The core idea is pixel-aligned fusion: VGGT predicts dense 3D geometry for each frame, Mask2Former predicts 2D semantic masks for each frame, and the system transfers labels through the same pixels used to create the 3D points. That keeps semantic predictions tied to the underlying geometry instead of being pasted on afterward.
+Core idea is pixel-aligned fusion: VGGT predicts dense 3D geometry for each frame, Mask2Former predicts 2D semantic masks for each frame, and the system transfers labels through the same pixels used to create the 3D points. That keeps semantic predictions tied to the underlying geometry instead of being pasted on afterward.
 
 ```text
 phone video
@@ -89,8 +89,6 @@ python -m spatial_recon.cli run \
   --overwrite-semantics
 ```
 
-If you want the commercial-use VGGT checkpoint, request access from the model page and replace the checkpoint with `facebook/VGGT-1B-Commercial`.
-
 ## Open-Vocabulary Querying
 
 After reconstruction:
@@ -102,7 +100,7 @@ python -m spatial_recon.cli query \
   --topk-percent 8
 ```
 
-This writes `runs/desk/exports/query_screen.ply`, where the top-scoring query matches are painted red and all other points are muted gray. The query path uses CLIPSeg heatmaps on the original saved frames, then samples those heatmaps using each 3D point's source frame and pixel.
+Writes `runs/desk/exports/query_screen.ply`, where the top-scoring query matches are painted red and all other points are muted gray. The query path uses CLIPSeg heatmaps on the original saved frames, then samples those heatmaps using each 3D point's source frame and pixel.
 
 ## Design Choices
 
@@ -123,9 +121,8 @@ This writes `runs/desk/exports/query_screen.ply`, where the top-scoring query ma
 
 - Record 10-25 seconds at normal walking speed.
 - Move laterally as well as rotating; pure rotation gives weaker geometry.
-- Keep the scene static and avoid reflective screens dominating the frame.
+- Keep scene static; avoid reflective screens dominating frame.
 - Capture overlapping views of object boundaries: chair legs, desk edges, screen, walls, floor.
-- Use 16-32 frames for a first run; increase only if the scene is sparse or large.
 
 ## Local Check
 
