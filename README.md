@@ -127,27 +127,11 @@ This writes `runs/desk/exports/query_screen.ply`, where the top-scoring query ma
 - Capture overlapping views of object boundaries: chair legs, desk edges, screen, walls, floor.
 - Use 16-32 frames for a first run; increase only if the scene is sparse or large.
 
-## Local Checks
-
-Synthetic exporter sanity check:
-
-```bash
-python scripts/create_sample_scene.py
-```
-
-Deterministic fusion tests:
+## Local Check
 
 ```bash
 python -m unittest tests/test_fusion.py
 ```
-
-## Optional Gradio Demo
-
-```bash
-python -m spatial_recon.app
-```
-
-This runs the same pipeline and writes outputs under `runs/gradio_desk/`.
 
 ## References
 
