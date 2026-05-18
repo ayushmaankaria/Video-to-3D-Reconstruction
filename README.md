@@ -2,7 +2,11 @@
 
 Phone video to a semantically labeled, searchable 3D scene using Meta VGGT, Mask2Former, and CLIPSeg.
 
-<!-- Add final result GIF here before submission. Suggested path: docs/desk_reconstruction.gif -->
+## Output Examples
+
+| Semantic point cloud | Poisson mesh visualization | Open-vocabulary chair query |
+| --- | --- | --- |
+| ![Semantic point cloud with chair label](Images/Point%20Cloud_Semantic%20Labels.png) | ![Poisson mesh reconstruction](Images/Poisson_Mesh.png) | ![Chair query highlighted in 3D](Images/chair_query.png) |
 
 ```bash
 git clone https://github.com/ayushmaankaria/Video-to-3D-Reconstruction.git
