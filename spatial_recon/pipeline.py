@@ -21,7 +21,7 @@ def run_pipeline(
     checkpoint: str | Path,
     image_resolution: int = 512,
     max_frames: int = 24,
-    target_fps: float = 4.0,
+    target_fps: float | None = 4.0,
     concepts: Iterable[str] | None = None,
     score_threshold: float = 0.5,
     conf_percentile: float = 35.0,
@@ -34,22 +34,49 @@ def run_pipeline(
     overwrite_predictions: bool = False,
     overwrite_semantics: bool = False,
 ) -> dict:
-    """End-to-end: video → frames → VGGT-Omega → SAM 3 → fused cloud + exports."""
+    """End-to-end: video → frames → VGGT-Omega → SAM 3 → fused cloud + exports.
+
+    Notes
+    -----
+    ``target_fps`` is accepted for CLI back-compat but is largely superseded by
+    ``max_frames`` combined with sharpness-aware per-bin selection
+    (``mode="hybrid"`` inside :func:`extract_frames`). When both are provided
+    we use ``target_fps`` only to *cap* the number of frames so we don't
+    oversample short clips.
+    """
     run_dir = ensure_dir(Path(run_dir))
 
     # 1) Frames
-    frames_meta = run_dir / "frames_meta.json"
-    if frames_meta.exists() and not overwrite_frames:
+    frames_meta_path = run_dir / "frames_meta.json"
+    frames_dir = run_dir / "frames"
+    if frames_meta_path.exists() and not overwrite_frames:
         meta = load_frames_meta(run_dir)
         print(f"[Pipeline] Reusing {meta.num_frames} frames @ {meta.width}x{meta.height}")
     else:
-        meta = extract_frames(
-            video_path, run_dir,
-            target_fps=target_fps,
-            max_frames=max_frames,
-            target_long_side=image_resolution,
+        effective_max = max_frames
+        if target_fps and target_fps > 0:
+            try:
+                import cv2  # local import: extract_frames already requires it
+                cap = cv2.VideoCapture(str(video_path))
+                src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+                n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                cap.release()
+                if src_fps > 0 and n_total > 0:
+                    duration = n_total / src_fps
+                    fps_cap = max(1, int(duration * target_fps))
+                    effective_max = min(max_frames, fps_cap)
+            except Exception as exc:
+                print(f"[Pipeline] target_fps probe failed ({exc}); "
+                      f"falling back to max_frames={max_frames}")
+
+        extract_frames(
+            video_path,
+            frames_dir,
+            max_frames=effective_max,
+            mode="hybrid",
             overwrite=overwrite_frames,
         )
+        meta = load_frames_meta(run_dir)
 
     # 2) Geometry
     preds_path = run_dir / "predictions.npz"
