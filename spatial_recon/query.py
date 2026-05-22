@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -33,11 +34,16 @@ def _load_sam3(device: str):
         from sam3.model.sam3_image_processor import Sam3Processor
     except ImportError as exc:
         raise ImportError("SAM 3 not installed (see semantics.py for install steps).") from exc
+    # Build SAM 3 in its native (mixed) dtype. Don't force-cast the whole
+    # model to fp32 or bf16 -- some sublayers keep fp32 weights while the
+    # image processor produces bf16 activations. We reconcile the two with a
+    # bf16 autocast block at forward time (see _sam3_score_maps).
     model = build_sam3_image_model()
     try:
         model = model.to(device)
     except Exception:
         pass
+    model.eval()
     processor = Sam3Processor(model)
     _SAM3_CACHE[device] = (model, processor)
     return model, processor
@@ -45,6 +51,9 @@ def _load_sam3(device: str):
 
 def _to_np(x) -> np.ndarray:
     if isinstance(x, torch.Tensor):
+        # NumPy can't cast bf16/fp16 directly -- promote first.
+        if x.dtype in (torch.bfloat16, torch.float16):
+            x = x.float()
         return x.detach().cpu().numpy()
     return np.asarray(x)
 
@@ -62,14 +71,22 @@ def _sam3_score_maps(
     _, processor = _load_sam3(device)
     F, H, W, _ = frames.shape
     out = np.zeros((F, H, W), dtype=np.float32)
+
+    autocast_ctx = (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if device.startswith("cuda")
+        else nullcontext()
+    )
+
     for i in tqdm(range(F), desc=f"SAM 3 query '{text}'"):
         img = Image.fromarray(frames[i])
-        state = processor.set_image(img)
-        try:
-            res = processor.set_text_prompt(state=state, prompt=text)
-        except Exception as exc:
-            print(f"[Query] frame {i} failed: {exc}")
-            continue
+        with autocast_ctx:
+            state = processor.set_image(img)
+            try:
+                res = processor.set_text_prompt(state=state, prompt=text)
+            except Exception as exc:
+                print(f"[Query] frame {i} failed: {exc}")
+                continue
         masks = res.get("masks")
         scores = res.get("scores")
         if masks is None or (hasattr(masks, "__len__") and len(masks) == 0):
