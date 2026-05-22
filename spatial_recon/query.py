@@ -1,135 +1,162 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PIL import Image
 
-from .utils import ensure_dir, list_images
-
-
-def slugify(text: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", text.strip().lower()).strip("_")
-    return slug or "query"
-
-
-def _resolve_device(device: str) -> str:
-    if device != "auto":
-        return device
-    try:
-        import torch
-
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except ImportError:
-        return "cpu"
-
-
-def _load_clipseg(model_name: str, device: str):
-    try:
-        from transformers import CLIPSegForImageSegmentation, CLIPSegProcessor
-    except ImportError as exc:
-        raise ImportError("Open-vocabulary querying needs transformers. Install requirements first.") from exc
-
-    processor = CLIPSegProcessor.from_pretrained(model_name)
-    model = CLIPSegForImageSegmentation.from_pretrained(model_name).to(device)
-    model.eval()
-    return processor, model
-
-
-def _frame_heatmap(image: Image.Image, text: str, processor, model, device: str) -> np.ndarray:
+try:
     import torch
+except ImportError as exc:  # pragma: no cover
+    raise RuntimeError("PyTorch is required for query.py") from exc
 
-    inputs = processor(text=[text], images=[image], padding=True, return_tensors="pt")
-    inputs = {key: value.to(device) for key, value in inputs.items()}
-    with torch.no_grad():
-        logits = model(**inputs).logits
-        heat = torch.sigmoid(logits).detach().cpu().numpy().squeeze()
-    heat_img = Image.fromarray(heat.astype(np.float32)).resize(image.size, Image.Resampling.BILINEAR)
-    return np.asarray(heat_img, dtype=np.float32)
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover
+    def tqdm(it, **_): return it
 
-
-def _write_query_ply(
-    path: Path,
-    points: np.ndarray,
-    colors: np.ndarray,
-    semantic_ids: np.ndarray,
-    scores: np.ndarray,
-    selected: np.ndarray,
-) -> None:
-    ensure_dir(path.parent)
-    out_colors = (colors.astype(np.float32) * 0.25 + 105).clip(0, 180).astype(np.uint8)
-    out_colors[selected] = np.asarray([255, 40, 35], dtype=np.uint8)
-    with path.open("w") as f:
-        f.write("ply\n")
-        f.write("format ascii 1.0\n")
-        f.write(f"element vertex {len(points)}\n")
-        f.write("property float x\nproperty float y\nproperty float z\n")
-        f.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
-        f.write("property int semantic_id\n")
-        f.write("property float query_score\n")
-        f.write("end_header\n")
-        for point, color, label_id, score in zip(points, out_colors, semantic_ids, scores):
-            f.write(
-                f"{point[0]:.6f} {point[1]:.6f} {point[2]:.6f} "
-                f"{int(color[0])} {int(color[1])} {int(color[2])} {int(label_id)} {float(score):.6f}\n"
-            )
+from .utils import ensure_dir, list_images
+from .video import load_frames_meta
+from .fusion import load_fused_cloud
+from .export import write_ply
 
 
-def query_cloud(
+_SAM3_CACHE: dict[str, Any] = {}
+
+
+def _load_sam3(device: str):
+    if device in _SAM3_CACHE:
+        return _SAM3_CACHE[device]
+    try:
+        from sam3.model_builder import build_sam3_image_model
+        from sam3.model.sam3_image_processor import Sam3Processor
+    except ImportError as exc:
+        raise ImportError("SAM 3 not installed (see semantics.py for install steps).") from exc
+    model = build_sam3_image_model()
+    try:
+        model = model.to(device)
+    except Exception:
+        pass
+    processor = Sam3Processor(model)
+    _SAM3_CACHE[device] = (model, processor)
+    return model, processor
+
+
+def _to_np(x) -> np.ndarray:
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
+
+
+@torch.inference_mode()
+def _sam3_score_maps(
+    frames: np.ndarray,        # [F, H, W, 3] uint8
+    text: str,
+    *,
+    device: str,
+    score_threshold: float = 0.5,
+) -> np.ndarray:
+    """For each frame return a (H, W) float32 map where each pixel holds the
+    *highest* SAM 3 mask score covering it (0 if no mask above threshold)."""
+    _, processor = _load_sam3(device)
+    F, H, W, _ = frames.shape
+    out = np.zeros((F, H, W), dtype=np.float32)
+    for i in tqdm(range(F), desc=f"SAM 3 query '{text}'"):
+        img = Image.fromarray(frames[i])
+        state = processor.set_image(img)
+        try:
+            res = processor.set_text_prompt(state=state, prompt=text)
+        except Exception as exc:
+            print(f"[Query] frame {i} failed: {exc}")
+            continue
+        masks = res.get("masks")
+        scores = res.get("scores")
+        if masks is None or (hasattr(masks, "__len__") and len(masks) == 0):
+            continue
+        masks = _to_np(masks)
+        if masks.ndim == 4 and masks.shape[1] == 1:
+            masks = masks[:, 0]
+        scores = (_to_np(scores).reshape(-1).astype(np.float32)
+                  if scores is not None else np.ones(len(masks), dtype=np.float32))
+        for m, s in zip(masks, scores):
+            s = float(s)
+            if s < score_threshold:
+                continue
+            if m.dtype != bool:
+                m = (m > 0.5) if float(m.max()) <= 1.0 else (m > 127)
+            if m.shape != (H, W):
+                m = np.asarray(
+                    Image.fromarray(m.astype(np.uint8) * 255).resize((W, H), Image.Resampling.NEAREST)
+                ) > 0
+            np.maximum(out[i], np.where(m, s, 0.0), out=out[i])
+    return out
+
+
+def query_scene(
     run_dir: str | Path,
     text: str,
-    out_ply: str | Path | None = None,
+    *,
     topk_percent: float = 10.0,
-    device: str = "auto",
-    model_name: str = "CIDAS/clipseg-rd64-refined",
-) -> tuple[Path, Path]:
-    """Highlight 3D points whose source pixels match an open-vocabulary text query."""
+    score_threshold: float = 0.5,
+    device: str | None = None,
+    save: bool = True,
+) -> dict[str, np.ndarray]:
+    """Open-vocabulary 3D query: highlight the top K% of fused points that
+    fall inside SAM 3's mask for ``text`` in their source frame."""
     run_dir = Path(run_dir)
-    npz_path = run_dir / "exports" / "fused_points.npz"
-    frames_dir = run_dir / "frames"
-    if not npz_path.exists():
-        raise FileNotFoundError(f"Missing fused point export: {npz_path}")
-    frame_paths = list_images(frames_dir)
-    if not frame_paths:
-        raise FileNotFoundError(f"Missing frame images: {frames_dir}")
+    cloud = load_fused_cloud(run_dir / "exports" / "fused_points.npz")
+    meta = load_frames_meta(run_dir)
+    image_paths = list_images(run_dir / "frames")
+    if len(image_paths) != meta.num_frames:
+        raise RuntimeError(
+            f"frames_meta.json says {meta.num_frames} frames, found {len(image_paths)}."
+        )
 
-    data = np.load(npz_path, allow_pickle=True)
-    points = data["points"]
-    colors = data["colors_rgb"]
-    semantic_ids = data["semantic_ids"]
-    source_frame = data["source_frame"].astype(np.int32)
-    source_y = data["source_y"].astype(np.int32)
-    source_x = data["source_x"].astype(np.int32)
+    H, W = meta.height, meta.width
+    frames = np.empty((meta.num_frames, H, W, 3), dtype=np.uint8)
+    for i, p in enumerate(image_paths):
+        img = Image.open(p).convert("RGB")
+        if img.size != (W, H):
+            img = img.resize((W, H), Image.Resampling.BILINEAR)
+        frames[i] = np.asarray(img, dtype=np.uint8)
 
-    resolved_device = _resolve_device(device)
-    print(f"[Query] Using {resolved_device} with {model_name}")
-    processor, model = _load_clipseg(model_name, resolved_device)
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    scores = np.zeros(len(points), dtype=np.float32)
-    for frame_idx, frame_path in enumerate(frame_paths):
-        point_mask = source_frame == frame_idx
-        if not np.any(point_mask):
-            continue
-        image = Image.open(frame_path).convert("RGB")
-        heatmap = _frame_heatmap(image, text, processor, model, resolved_device)
-        y = np.clip(source_y[point_mask], 0, heatmap.shape[0] - 1)
-        x = np.clip(source_x[point_mask], 0, heatmap.shape[1] - 1)
-        scores[point_mask] = heatmap[y, x]
+    score_maps = _sam3_score_maps(frames, text, device=device, score_threshold=score_threshold)
+    n_hit_px = int((score_maps > 0).sum())
+    print(f"[Query] SAM 3 produced {n_hit_px:,} matching pixels across {len(frames)} frames")
 
-    fraction = max(0.0, min(100.0, topk_percent)) / 100.0
-    k = max(1, int(np.ceil(len(scores) * fraction)))
-    top_idx = np.argpartition(scores, -k)[-k:]
-    selected = np.zeros(len(scores), dtype=bool)
-    selected[top_idx] = True
-    cutoff = float(scores[top_idx].min())
-    if out_ply is None:
-        out_ply = run_dir / "exports" / f"query_{slugify(text)}.ply"
-    out_ply = Path(out_ply)
-    _write_query_ply(out_ply, points, colors, semantic_ids, scores, selected)
+    # Per-point score from each point's source frame + saved-frame pixel.
+    scores = score_maps[cloud.source_frame, cloud.source_y, cloud.source_x]
 
-    score_path = out_ply.with_suffix(".npz")
-    np.savez_compressed(score_path, query=text, scores=scores, selected=selected, threshold=cutoff)
-    print(f"[Query] Highlighted {int(selected.sum())}/{len(points)} points for query '{text}'")
-    print(f"[Query] Wrote {out_ply}")
-    return out_ply, score_path
+    if topk_percent and 0 < topk_percent < 100 and (scores > 0).any():
+        k = max(1, int(round(len(scores) * topk_percent / 100.0)))
+        order = np.argsort(-scores)
+        top = order[:k]
+        selected = np.zeros(len(scores), dtype=bool)
+        selected[top[scores[top] > 0]] = True
+    else:
+        selected = scores > 0
+
+    print(f"[Query] Selected {int(selected.sum()):,} / {len(scores):,} points "
+          f"({100.0 * selected.mean():.1f}%)")
+
+    if save:
+        exports = ensure_dir(run_dir / "exports")
+        slug = "".join(c if c.isalnum() else "_" for c in text.lower()).strip("_")[:60] or "query"
+        ply_path = exports / f"query_{slug}.ply"
+        # Selected -> red; rest -> muted gray, so the highlight stays readable.
+        colors = np.full((len(cloud.points), 3), 80, dtype=np.uint8)
+        colors[selected] = (220, 30, 30)
+        write_ply(ply_path, {"points": cloud.points, "colors": colors})
+        print(f"[Query] Wrote {ply_path}")
+
+    return {
+        "text": text,
+        "selected_mask": selected,
+        "scores": scores,
+        "points": cloud.points[selected],
+        "colors": cloud.colors[selected],
+    }

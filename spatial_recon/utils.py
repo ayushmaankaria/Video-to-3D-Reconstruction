@@ -1,102 +1,59 @@
 from __future__ import annotations
 
+import colorsys
 import json
+import shlex
+import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
-import numpy as np
-from PIL import Image
-
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
 def ensure_dir(path: str | Path) -> Path:
-    path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    p = Path(path)
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
-def list_images(folder: str | Path) -> list[Path]:
-    folder = Path(folder)
-    return sorted(p for p in folder.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS)
+def list_images(directory: str | Path) -> list[Path]:
+    """Image files in ``directory``, sorted lexicographically (matches the
+    zero-padded names written by ``video.extract_frames``)."""
+    d = Path(directory)
+    if not d.is_dir():
+        raise FileNotFoundError(f"Not a directory: {d}")
+    files = [p for p in d.iterdir() if p.suffix.lower() in IMAGE_EXTS]
+    files.sort(key=lambda p: p.name)
+    return files
 
 
-def read_rgb(path: str | Path) -> np.ndarray:
-    return np.asarray(Image.open(path).convert("RGB"))
+def write_json(path: str | Path, data: Any) -> Path:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2, default=str))
+    return p
 
 
-def write_json(path: str | Path, payload: dict) -> None:
-    path = Path(path)
-    ensure_dir(path.parent)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-
-
-def load_json(path: str | Path) -> dict:
+def read_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text())
 
 
-def resize_label_map_nearest(label_map: np.ndarray, size_hw: tuple[int, int]) -> np.ndarray:
-    h, w = size_hw
-    img = Image.fromarray(label_map.astype(np.int32))
-    return np.asarray(img.resize((w, h), Image.Resampling.NEAREST)).astype(np.int32)
+# Deterministic per-class color palette. Class 0 ("unknown") is gray.
+_PALETTE_CACHE: dict[int, tuple[int, int, int]] = {0: (140, 140, 140)}
 
 
 def semantic_color(label_id: int) -> tuple[int, int, int]:
-    palette = [
-        (160, 160, 160),
-        (66, 135, 245),
-        (245, 166, 35),
-        (80, 180, 120),
-        (220, 80, 95),
-        (155, 95, 220),
-        (40, 180, 190),
-        (235, 215, 75),
-        (110, 110, 110),
-        (235, 120, 45),
-        (95, 190, 80),
-        (70, 95, 210),
-        (210, 85, 170),
-        (55, 150, 150),
-        (180, 130, 70),
-        (120, 160, 230),
-    ]
-    if label_id <= 0:
-        return palette[0]
-    if label_id < len(palette):
-        return palette[label_id]
-    x = int(label_id * 2654435761) & 0xFFFFFFFF
-    r = int(80 + (x & 0x7F))
-    g = int(80 + ((x >> 8) & 0x7F))
-    b = int(80 + ((x >> 16) & 0x7F))
-    return (r, g, b)
+    label_id = int(label_id)
+    if label_id in _PALETTE_CACHE:
+        return _PALETTE_CACHE[label_id]
+    # Golden-ratio hue spacing keeps neighbouring class ids visually separated.
+    hue = (label_id * 0.61803398875) % 1.0
+    r, g, b = colorsys.hsv_to_rgb(hue, 0.65, 0.95)
+    color = (int(r * 255), int(g * 255), int(b * 255))
+    _PALETTE_CACHE[label_id] = color
+    return color
 
 
-def palette_for_labels(label_ids: Iterable[int]) -> dict[int, tuple[int, int, int]]:
-    return {int(label_id): semantic_color(int(label_id)) for label_id in sorted(set(label_ids))}
-
-
-def normalize_uint8(image: np.ndarray) -> np.ndarray:
-    image = np.asarray(image)
-    if image.dtype == np.uint8:
-        return image
-    if image.max(initial=0) <= 1.0:
-        image = image * 255.0
-    return np.clip(image, 0, 255).astype(np.uint8)
-
-
-def command_string(args: object) -> str:
-    values = vars(args)
-    parts = ["python", "-m", "spatial_recon.cli"]
-    command = values.get("command")
-    if command:
-        parts.append(str(command))
-    for key, value in values.items():
-        if key == "command" or value is None or value is False:
-            continue
-        flag = "--" + key.replace("_", "-")
-        if value is True:
-            parts.append(flag)
-        else:
-            parts.extend([flag, str(value)])
-    return " ".join(parts)
+def command_string(_args=None) -> str:
+    """Reconstruct the invocation line for the report."""
+    return " ".join(shlex.quote(s) for s in sys.argv)
