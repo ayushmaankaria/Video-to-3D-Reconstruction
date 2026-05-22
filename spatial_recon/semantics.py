@@ -68,6 +68,22 @@ def _paint_label_map(label_map: np.ndarray) -> np.ndarray:
     return rgb
 
 
+class _NoAutocast:
+    """Context that disables CUDA + CPU autocast, regardless of leaked state."""
+    def __enter__(self):
+        import torch
+        self._cuda = torch.autocast(device_type="cuda", enabled=False)
+        self._cpu = torch.autocast(device_type="cpu", enabled=False)
+        self._cuda.__enter__()
+        self._cpu.__enter__()
+        return self
+
+    def __exit__(self, *exc):
+        self._cpu.__exit__(*exc)
+        self._cuda.__exit__(*exc)
+        return False
+
+
 def run_semantics(
     image_dir: str | Path,
     out_dir: str | Path,
@@ -86,6 +102,7 @@ def run_semantics(
         out_dir/labels.json              {labels: {"0": "unknown", "1": ...}, frames: [...]}
     """
     try:
+        import torch
         from sam3.model_builder import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
     except ImportError as exc:
@@ -104,13 +121,28 @@ def run_semantics(
     resolved_device = _resolve_device(device)
     print(f"[Semantics] SAM 3 on {resolved_device}; {len(concepts)} concepts")
 
-    model = build_sam3_image_model()
-    try:
-        model = model.to(resolved_device)
-    except Exception:
-        pass  # some builders place the model themselves
+    # Build SAM 3 strictly in fp32. We disable any leaked autocast from a
+    # previous bfloat16 forward (e.g. VGGT-Omega) so the backbone's
+    # F.linear sees matching dtypes.
+    with _NoAutocast():
+        model = build_sam3_image_model()
+        try:
+            model = model.to(device=resolved_device, dtype=torch.float32)
+        except Exception:
+            try:
+                model = model.to(resolved_device)
+            except Exception:
+                pass  # some builders place the model themselves
+        # Ensure every parameter is fp32 even if .to(dtype=...) was a no-op.
+        for p in model.parameters():
+            if p.dtype != torch.float32:
+                p.data = p.data.float()
+        for b in model.buffers():
+            if b.is_floating_point() and b.dtype != torch.float32:
+                b.data = b.data.float()
+        model.eval()
 
-    processor = Sam3Processor(model)
+        processor = Sam3Processor(model)
 
     out_dir = ensure_dir(out_dir)
     masks_dir = ensure_dir(out_dir / "label_maps")
@@ -129,37 +161,38 @@ def run_semantics(
         label_map = np.zeros((H, W), dtype=np.int32)
         score_map = np.zeros((H, W), dtype=np.float32)
 
-        state = processor.set_image(image)
-        for concept in concepts:
-            lid = label_to_id[concept.strip().lower().replace(" ", "_")]
-            try:
-                out = processor.set_text_prompt(state=state, prompt=concept)
-            except Exception as exc:
-                print(f"[Semantics] '{concept}' failed on frame {fi}: {exc}")
-                continue
-
-            masks = out.get("masks")
-            scores = out.get("scores")
-            if masks is None or (hasattr(masks, "__len__") and len(masks) == 0):
-                continue
-
-            masks_np = _to_numpy(masks)
-            if masks_np.ndim == 4 and masks_np.shape[1] == 1:
-                masks_np = masks_np[:, 0]
-
-            if scores is not None:
-                scores_np = _to_numpy(scores).reshape(-1).astype(np.float32)
-            else:
-                scores_np = np.ones(len(masks_np), dtype=np.float32)
-
-            for m, s in zip(masks_np, scores_np):
-                s = float(s)
-                if s < score_threshold:
+        with _NoAutocast(), torch.inference_mode():
+            state = processor.set_image(image)
+            for concept in concepts:
+                lid = label_to_id[concept.strip().lower().replace(" ", "_")]
+                try:
+                    out = processor.set_text_prompt(state=state, prompt=concept)
+                except Exception as exc:
+                    print(f"[Semantics] '{concept}' failed on frame {fi}: {exc}")
                     continue
-                bm = _binarize_mask(m, (H, W))
-                better = bm & (s > score_map)
-                label_map[better] = lid
-                score_map[better] = s
+
+                masks = out.get("masks")
+                scores = out.get("scores")
+                if masks is None or (hasattr(masks, "__len__") and len(masks) == 0):
+                    continue
+
+                masks_np = _to_numpy(masks)
+                if masks_np.ndim == 4 and masks_np.shape[1] == 1:
+                    masks_np = masks_np[:, 0]
+
+                if scores is not None:
+                    scores_np = _to_numpy(scores).reshape(-1).astype(np.float32)
+                else:
+                    scores_np = np.ones(len(masks_np), dtype=np.float32)
+
+                for m, s in zip(masks_np, scores_np):
+                    s = float(s)
+                    if s < score_threshold:
+                        continue
+                    bm = _binarize_mask(m, (H, W))
+                    better = bm & (s > score_map)
+                    label_map[better] = lid
+                    score_map[better] = s
 
         np.save(masks_dir / f"{fi:04d}.npy", label_map.astype(np.int16))
         Image.fromarray(_paint_label_map(label_map)).save(previews_dir / f"{fi:04d}.png")
