@@ -39,6 +39,8 @@ def _to_numpy(x) -> np.ndarray:
     try:
         import torch
         if isinstance(x, torch.Tensor):
+            if x.dtype in (torch.bfloat16, torch.float16):
+                x = x.float()
             return x.detach().cpu().numpy()
     except ImportError:
         pass
@@ -66,22 +68,6 @@ def _paint_label_map(label_map: np.ndarray) -> np.ndarray:
     for lid in np.unique(label_map):
         rgb[label_map == lid] = semantic_color(int(lid))
     return rgb
-
-
-class _NoAutocast:
-    """Context that disables CUDA + CPU autocast, regardless of leaked state."""
-    def __enter__(self):
-        import torch
-        self._cuda = torch.autocast(device_type="cuda", enabled=False)
-        self._cpu = torch.autocast(device_type="cpu", enabled=False)
-        self._cuda.__enter__()
-        self._cpu.__enter__()
-        return self
-
-    def __exit__(self, *exc):
-        self._cpu.__exit__(*exc)
-        self._cuda.__exit__(*exc)
-        return False
 
 
 def run_semantics(
@@ -121,28 +107,26 @@ def run_semantics(
     resolved_device = _resolve_device(device)
     print(f"[Semantics] SAM 3 on {resolved_device}; {len(concepts)} concepts")
 
-    # Build SAM 3 strictly in fp32. We disable any leaked autocast from a
-    # previous bfloat16 forward (e.g. VGGT-Omega) so the backbone's
-    # F.linear sees matching dtypes.
-    with _NoAutocast():
-        model = build_sam3_image_model()
-        try:
-            model = model.to(device=resolved_device, dtype=torch.float32)
-        except Exception:
-            try:
-                model = model.to(resolved_device)
-            except Exception:
-                pass  # some builders place the model themselves
-        # Ensure every parameter is fp32 even if .to(dtype=...) was a no-op.
-        for p in model.parameters():
-            if p.dtype != torch.float32:
-                p.data = p.data.float()
-        for b in model.buffers():
-            if b.is_floating_point() and b.dtype != torch.float32:
-                b.data = b.data.float()
-        model.eval()
+    # Build SAM 3 in its native (mixed) dtype. SAM 3 expects to be executed
+    # under bf16 autocast: the image processor produces bf16 inputs and some
+    # layers keep fp32 weights, with autocast bridging them. Don't .to(dtype=...)
+    # the whole model — that breaks the mix and corrupts complex RoPE buffers.
+    model = build_sam3_image_model()
+    try:
+        model = model.to(resolved_device)
+    except Exception:
+        pass  # some builders place the model themselves
+    model.eval()
 
-        processor = Sam3Processor(model)
+    processor = Sam3Processor(model)
+
+    # Autocast context appropriate for the device.
+    use_cuda = resolved_device.startswith("cuda")
+    autocast_ctx = (
+        torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        if use_cuda
+        else torch.autocast(device_type="cpu", dtype=torch.bfloat16)
+    )
 
     out_dir = ensure_dir(out_dir)
     masks_dir = ensure_dir(out_dir / "label_maps")
@@ -161,7 +145,7 @@ def run_semantics(
         label_map = np.zeros((H, W), dtype=np.int32)
         score_map = np.zeros((H, W), dtype=np.float32)
 
-        with _NoAutocast(), torch.inference_mode():
+        with torch.inference_mode(), autocast_ctx:
             state = processor.set_image(image)
             for concept in concepts:
                 lid = label_to_id[concept.strip().lower().replace(" ", "_")]
