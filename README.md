@@ -123,7 +123,7 @@ Writes `runs/desk/exports/query_screen.ply`, where the top-scoring query matches
 
 ## Recording Tips
 
-- Record 10-25 seconds at normal walking speed.
+- Record at normal/slower walking speed.
 - Move laterally as well as rotating; pure rotation gives weaker geometry.
 - Keep scene static; avoid reflective screens dominating frame.
 - Capture overlapping views of object boundaries: chair legs, desk edges, screen, walls, floor.
