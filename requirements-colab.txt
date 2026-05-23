@@ -10,5 +10,6 @@ einops>=0.7
 timm>=0.9
 trimesh>=4.4
 plotly>=5.22
+scikit-learn>=1.4
 vggt-omega @ git+https://github.com/facebookresearch/vggt-omega.git
 sam3 @ git+https://github.com/facebookresearch/sam3.git
