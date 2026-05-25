@@ -1,25 +1,18 @@
 # Video-to-3D-Reconstruction
 
-Phone video to a robot-queryable 3D scene memory using Meta **VGGT-Omega** for geometry and **SAM 3** for open-vocabulary semantics.
+Phone video to a queryable 3D scene using Meta **VGGT-Omega** for geometry and **SAM 3** for open-vocabulary semantics.
 
-Given a short handheld video of an indoor area, this system produces (a) a geometrically coherent 3D point cloud with the predicted camera trajectory, (b) per-point semantic labels aligned to the geometry by construction, (c) an open-vocabulary text query interface that highlights matching 3D regions on demand, and (d) a lightweight **robot spatial memory** that clusters the scene into object instances, estimates their 3D properties, and answers affordance-style questions such as where a robot could place an object or where a person could sit.
+Given a video of an indoor area, the system produces a geometrically coherrent 3D point cloud, semantic labels per point, and open-vocabulary text querying that highlights matching 3D regions. It also features a semantic reasoning primitive that clusters the scene into object instances, estimates their 3D properties, and answers affordance style questions.
 
-**Geometry–semantics coherence is enforced by construction**: every semantic label is sampled from the exact pixel that produced its 3D point, so labels cannot drift relative to the underlying geometry.
+Every semantic label is sampled from the exact pixel that produced its 3D point, so labels cannot drift relative to the underlying geometry.
 
-## Main Feature: Robot Spatial Memory
+## Semantic Reasoning Primitive
 
-The main approach and extension in this project is a **spatial memory layer** built on top of the reconstruction:
+The main approach is a **spatial memory layer** built on top of the reconstruction. Ex:
 
-```text
-semantic 3D point cloud
-  → class-wise DBSCAN instance clustering
-  → object centroids, bounding boxes, volumes, confidence, and point counts
-  → rule-based affordances such as placeable, sittable, movable, readable
-  → spatial relations such as "near"
-  → scene queries for robotics
+```bash
+python -m spatial_recon.query_scene --run runs/desk
 ```
-
-Example queries:
 
 ```text
 Q: Where can a robot place a cup?
@@ -28,11 +21,11 @@ A: desk_01
 Q: Find a place where a human could sit.
 A: chair_01, chair_02
 
-Q: What objects are near the desk?
-A: monitor_01, keyboard_01, mouse_01, cable_01, ...
+Q: Which objects are likely movable?
+A: chair_01, chair_02, keyboard_01, mouse_01, guitar_01
 ```
 
-The point of this layer is to make the reconstruction inspectable as a robotics scene representation: objects have positions, sizes, confidence scores, relationships, and affordances that can be verified visually in 3D.
+The point of this layer is to make the reconstruction inspectable for robtics. Objects have positions, sizes, confidence scores, relationships, and affordances that can be verified visually in 3D.
 
 ## Output Examples for VGGT-Omega
 
@@ -48,45 +41,9 @@ The point of this layer is to make the reconstruction inspectable as a robotics 
 | ![Memory Instance View](Images/memory_instances_viewer.png) |
 | Colored object clusters with centroid labels from `memory_instances.html` |
 
-Spatial memory query input:
 
-```bash
-python -m spatial_recon.query_scene --run runs/desk
-```
 
-Output:
 
-```text
-Q: Where can a robot place a cup?
-A: desk_01
-
-Q: Find a place where a human could sit.
-A: chair_01, chair_02
-
-Q: What objects are near the desk?
-A: monitor_01, guitar_01, medicine_01, keyboard_01, cable_02, toothbrush_01, mouse_01, chair_01, cable_01, chair_02
-
-Q: Find the largest support surface.
-A: desk_01
-
-Q: Which objects are likely movable?
-A: chair_01, chair_02, keyboard_01, mouse_01, guitar_01
-```
-
-## Approach
-
-```text
-phone video
-  → sharp frame sampling (fps cap + max-frames)
-  → VGGT-Omega: per-frame camera, intrinsics, depth, confidence
-  → SAM 3: per-frame text-prompted semantic masks
-  → confidence filtering + voxel fusion (majority-vote labels)
-  → RGB cloud + semantic cloud + camera trajectory viewer
-  → optional SAM 3 text query over fused 3D points
-  → robot spatial memory: object instances + relations + affordance queries
-```
-
-The core idea is **pixel-aligned fusion**. VGGT-Omega predicts dense 3D geometry per frame; SAM 3 predicts text-prompted masks for the same frames; semantic IDs are sampled at the exact pixels used for 3D unprojection. Each fused point stores both its saved-frame and VGGT-grid pixel provenance, so open-vocabulary queries can re-prompt SAM 3 at the correct resolution after the fact. The spatial memory layer then groups those labeled 3D points into objects that can be queried like a robot would query its environment.
 
 ## Install
 
@@ -96,9 +53,16 @@ cd Video-to-3D-Reconstruction
 pip install -r requirements-colab.txt
 ```
 
-VGGT-Omega and SAM 3 are gated. Request access on Hugging Face, generate a read token, and authenticate (`hf auth login`) before running. An L4 or A100 is recommended.
+VGGT-Omega and SAM 3 are gated. Request access on Hugging Face, generate a read token, and authenticate (`hf auth login`) before running.
 
-## Run
+## Recording Tips
+
+- Walk at normal or slightly slow pace; avoid sudden motion.
+- Translate as well as rotate — pure rotation gives VGGT-Omega weaker geometry.
+- Keep the scene static and avoid letting reflective screens dominate the frame.
+- Capture overlapping views of object boundaries: chair legs, desk edges, monitors, walls, floor.
+
+## Example Run
 
 ```bash
 python -m spatial_recon.cli run \
@@ -123,11 +87,11 @@ python -m spatial_recon.cli query \
   --score-threshold 0.5
 ```
 
-Writes `runs/desk/exports/query_monitor.ply` with the top-scoring matches painted red. The query path re-runs SAM 3 with the new prompt on the saved frames and samples each 3D point's score using its stored source frame and pixel coordinates.
+Writes `runs/desk/exports/query_monitor.ply` with the top-scoring matches painted red.
 
 ### Build robot spatial memory
 
-After the main reconstruction has produced `runs/desk/exports/fused_points.npz` and `runs/desk/semantics/labels.json`, build object-level memory:
+After the main reconstruction has produced `runs/desk/exports/fused_points.npz` and `runs/desk/semantics/labels.json`,
 
 ```bash
 python -m spatial_recon.memory \
@@ -158,7 +122,7 @@ runs/desk/
   exports/
     reconstruction_rgb.ply        # geometry colored by RGB
     reconstruction_semantic.ply   # geometry colored by concept
-    reconstruction_semantic.glb   # point-cloud GLB (best-effort)
+    reconstruction_semantic.glb   # point-cloud GLB
     viewer.html                   # interactive cloud + camera path
     semantic_legend.json
     fused_points.npz              # points, labels, confidence, source pixels
@@ -169,7 +133,7 @@ runs/desk/
   REPORT.md                       # quality stats and design notes
 ```
 
-## Reference Run
+## Results & Runtime
 
 A handheld iPhone 16 Pro clip (4K, 60 fps) of a desk area, processed end-to-end on a single **NVIDIA L4** in **~8 minutes**:
 
@@ -181,40 +145,33 @@ A handheld iPhone 16 Pro clip (4K, 60 fps) of a desk area, processed end-to-end 
 | Mean / median VGGT-Omega confidence | 6.58 / 6.34 |
 | Scene extent (bbox) | ~1.34 m × 1.59 m × 1.10 m |
 
-Concept distribution after fusion: `unknown` 25.0k, `wall` 24.2k, `floor` 14.4k, `chair` 8.8k, `desk` 7.3k, `monitor` 6.1k, `cable` 1.5k, `guitar` 1.5k, `keyboard` 0.8k, `medicine` 0.5k, `mouse` 0.2k, `toothbrush` 0.2k.
+
+## Original VGGT/Mask2Former Output Examples
+| Semantic point cloud | Poisson Disk Sampling |`chair` query |
+| --- | --- | --- |
+| ![Semantic point cloud](Images/vggt_spc.png) | ![Poisson mesh](Images/vggt_pds.png) | ![Chair query](Images/vggt_chair_query.png) |
+
+
 
 ## Design Choices
 
-- **VGGT-Omega over plain VGGT and over COLMAP/SfM + MVS.** I first ran the baseline VGGT model and got usable but subpar geometry on phone-video desk scenes. VGGT-Omega (released May 18, 2026 by Meta) gave noticeably cleaner depth and more consistent cameras, and avoided the matching-failure modes of classical SfM on textureless office surfaces.
-- **SAM 3 over Mask2Former / CLIPSeg.** Both alternatives were tried; SAM 3 produced cleaner instance-level masks for indoor concepts and, critically, supports the same open-vocabulary text prompts at reconstruction time *and* at query time, which is what makes the query subcommand possible without a second model.
-- **Point cloud as the primary output.** Raw points preserve VGGT-Omega's geometry directly. Poisson meshes look fuller but can hallucinate curved shells around sparse or noisy regions, so the mesh is treated as a visualization rather than the source of truth.
-- **Pixel-aligned semantics, not post-hoc projection.** SAM 3 labels are sampled at the same pixels used for 3D unprojection — geometry and semantics share a coordinate system by construction.
-- **Voxel fusion with confidence-weighted majority vote.** Each voxel is represented by its highest-confidence point and labeled by the most common class inside it (ties broken by confidence). Per-point provenance for both the saved frame and the VGGT prediction grid is preserved for downstream querying.
-- **Spatial memory as the robotics layer.** The project intentionally goes beyond reconstruction by clustering semantic points into object entities. Each entity stores a centroid, 3D extent, volume, confidence, nearby objects, and simple affordances. This turns the output into something closer to a robot's working map than a static visualization.
-- **Camera trajectory in the viewer.** Predicted camera poses are rendered alongside the cloud so a reviewer can see how the phone moved through the scene and judge geometric plausibility directly.
+- **VGGT-Omega over plain VGGT and COLMAP/SfM + MVS** I first ran the baseline VGGT model and got usable but subpar geometry on desk scene. VGGT-Omega (released May 18, 2026 by Meta) gave noticeably cleaner depth and more consistent cameras, and avoided the matching-failure modes of classical SfM on textureless office surfaces.
+- **SAM 3 over Mask2Former** SAM 3 produces cleaner instance-level masks for indoor concepts and lets us use the exact same text prompts for both reconstruction and querying.
+- **Pixel-aligned semantics** Sampled SAM 3 labels at the exact pixels used for 3D unprojection. Geometry and semantics share a coordinate system by construction.
+- **Voxel fusion** A simple confidence-weighted majority vote keeps things fast while preserving the source pixel provenance for downstream queries.
+- **Spatial memory** The project intentionally goes beyond reconstruction by clustering semantic points into object entities, turning the output into something closer to a robot's working map than a static visualization.
 
-## What Works, What Doesn't
-
-**Reconstructs well:** the desk, monitors, chair, and small objects on the desk (medicine bottles, keyboard, mouse) are clean and recognisable in 3D. Monitor screens, often a failure mode for dense methods, hold up reasonably.
-
-**Struggles:**
-- Reflective surfaces such as the side of the guitar are noisy and partially missing, as expected from view-dependent reflections.
-- Floor and walls show mild deformation, likely a function of recording style — pure-rotation segments and limited parallax across textureless surfaces give VGGT-Omega less to anchor against.
 
 ## Limitations
-
-- SAM 3 masks are prompt-dependent. The chosen concept list directly affects which objects receive labels in the fused cloud, and unlisted objects fall into `unknown`.
-- Open-vocabulary querying re-runs SAM 3 per query. A more efficient version would cache dense per-frame features or distill them into per-point feature embeddings for instant queries.
-- Spatial memory affordances are rule-based. They are useful for demonstrating robot-style reasoning, but they depend on the semantic label being correct and are not learned from interaction data.
-- A 3D Gaussian Splatting visualisation path would likely produce a more photorealistic output than point-cloud rendering, at the cost of a heavier optimisation stage.
+- Reflective surfaces such as the side of the guitar are noisy and partially missing, as expected from view-dependent reflections. Floor and walls show mild deformation, likely a function of recording style.
+- SAM 3 masks are prompt-dependent. Unlisted objects fall into the "unkown" category.
 - Limited GPU usage in Colab. (Note: I'm excited to work in industry where I can utilize more compute rather than T4/L4s in Colab)
 
-## Recording Tips
+## Future Work
+- Transitioning to affordances learned from interaction data, rather than rule-based affordances, would make the system much more robust fo real-world robotics.
+- Open-vocabulary querying re-runs SAM 3 per query, so distilling dense per-frame features into per-point 3D embeddings would allow for instant queries/faster runtime.
+- Adding a 3D Gaussian Splatting visualization path would produce a more photorealistic output.
 
-- Walk at normal or slightly slow pace; avoid sudden motion.
-- Translate as well as rotate — pure rotation gives VGGT-Omega weaker geometry.
-- Keep the scene static and avoid letting reflective screens dominate the frame.
-- Capture overlapping views of object boundaries: chair legs, desk edges, monitors, walls, floor.
 
 ## References
 
