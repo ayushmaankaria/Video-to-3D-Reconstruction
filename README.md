@@ -58,7 +58,7 @@ VGGT-Omega and SAM 3 are gated. Request access on Hugging Face, generate a read 
 ## Recording Tips
 
 - Walk at normal or slightly slow pace; avoid sudden motion.
-- Translate as well as rotate — pure rotation gives VGGT-Omega weaker geometry.
+- Translate and rotate, pure rotation gives VGGT-Omega weaker geometry.
 - Keep the scene static and avoid letting reflective screens dominate the frame.
 - Capture overlapping views of object boundaries: chair legs, desk edges, monitors, walls, floor.
 
