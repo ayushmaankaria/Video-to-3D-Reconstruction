@@ -93,7 +93,7 @@ python -m spatial_recon.cli query \
 
 Writes `runs/desk/exports/query_monitor.ply` with the top-scoring matches painted red.
 
-### Build robot spatial memory
+### Build spatial memory
 
 After the main reconstruction has produced `runs/desk/exports/fused_points.npz` and `runs/desk/semantics/labels.json`,
 
