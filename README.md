@@ -32,7 +32,7 @@ The point of this layer is to make the reconstruction inspectable for robtics. O
 | Semantic point cloud | Poisson Disk Sampling | Open-vocabulary `chair` query |
 | --- | --- | --- |
 | ![Semantic point cloud](Images/Semantic_Point_Cloud.png) | ![Poisson mesh](Images/Poisson_disk_sampling.png) | ![Chair query](Images/chair_query.png) |
-| Fused cloud colored by SAM 3 concept ID | Poisson Disk Sampling over the same points | Top-scoring matches for the prompt `chair` highlighted in red |
+| Fused cloud colored by SAM 3 concept ID | Poisson Disk Sampling over the same points | Highest scoring matches for the prompt `chair` highlighted in red |
 
 ### Spatial Memory Examples
 
