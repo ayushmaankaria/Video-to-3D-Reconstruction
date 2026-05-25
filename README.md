@@ -2,13 +2,14 @@
 
 Phone video to a queryable 3D scene using Meta **VGGT-Omega** for geometry and **SAM 3** for open-vocabulary semantics.
 
-Given a video of an indoor area, the system produces a geometrically coherrent 3D point cloud, semantic labels per point, and open-vocabulary text querying that highlights matching 3D regions. It also features a semantic reasoning primitive that clusters the scene into object instances, estimates their 3D properties, and answers affordance style questions.
+Given a video of an indoor area, the system produces a geometrically coherant 3D point cloud, semantic labels per point, and open-vocabulary text querying that highlights matching 3D regions. It also features a semantic reasoning primitive that clusters the scene into object instances, estimates their 3D properties, and answers affordance style questions.
 
 Every semantic label is sampled from the exact pixel that produced its 3D point, so labels cannot drift relative to the underlying geometry.
 
 ## Semantic Reasoning Primitive
 
-The main approach is a **spatial memory layer** built on top of the reconstruction. Ex:
+The main approach is a **spatial memory layer** built on top of the reconstruction.  
+VGGT-Omega predicts dense 3D geometry per frame; SAM 3 predicts prompted masks for the same frames; semantic IDs are sampled at the exact pixels used for 3D unprojection. Each fused point stores both its frame and VGGT-grid pixel provenance, so open-vocabulary queries can reprompt SAM 3 at the correct resolution after the fact. The spatial memory layer then groups those labeled 3D points into objects that can be queried.
 
 ```bash
 python -m spatial_recon.query_scene --run runs/desk
@@ -25,14 +26,14 @@ Q: Which objects are likely movable?
 A: chair_01, chair_02, keyboard_01, mouse_01, guitar_01
 ```
 
-The point of this layer is to make the reconstruction inspectable for robtics. Objects have positions, sizes, confidence scores, relationships, and affordances that can be verified visually in 3D.
+The point of this layer is to make the reconstruction inspectable for robotics. Objects have positions, sizes, confidence scores, relationships, and affordances that can be verified visually in 3D.
 
 ## Output Examples for VGGT-Omega
 
 | Semantic point cloud | Poisson Disk Sampling | Open-vocabulary `chair` query |
 | --- | --- | --- |
 | ![Semantic point cloud](Images/Semantic_Point_Cloud.png) | ![Poisson mesh](Images/Poisson_disk_sampling.png) | ![Chair query](Images/chair_query.png) |
-| Fused cloud colored by SAM 3 concept ID | Poisson Disk Sampling over the same points | Top-scoring matches for the prompt `chair` highlighted in red |
+| Fused cloud colored by SAM 3 concept ID | Poisson Disk Sampling over the same points | Highest scoring matches for the prompt `chair` highlighted in red |
 
 ### Spatial Memory Examples
 
@@ -41,7 +42,10 @@ The point of this layer is to make the reconstruction inspectable for robtics. O
 | ![Memory Instance View](Images/memory_instances_viewer.png) |
 | Colored object clusters with centroid labels from `memory_instances.html` |
 
-
+## Original VGGT/Mask2Former Output Examples
+| Semantic point cloud | Poisson Disk Sampling |`chair` query |
+| --- | --- | --- |
+| ![Semantic point cloud](Images/vggt_spc.png) | ![Poisson mesh](Images/vggt_pds.png) | ![Chair query](Images/vggt_chair_query.png) |
 
 
 
@@ -58,7 +62,7 @@ VGGT-Omega and SAM 3 are gated. Request access on Hugging Face, generate a read 
 ## Recording Tips
 
 - Walk at normal or slightly slow pace; avoid sudden motion.
-- Translate as well as rotate — pure rotation gives VGGT-Omega weaker geometry.
+- Translate and rotate, pure rotation gives VGGT-Omega weaker geometry.
 - Keep the scene static and avoid letting reflective screens dominate the frame.
 - Capture overlapping views of object boundaries: chair legs, desk edges, monitors, walls, floor.
 
@@ -146,12 +150,6 @@ A handheld iPhone 16 Pro clip (4K, 60 fps) of a desk area, processed end-to-end 
 | Scene extent (bbox) | ~1.34 m × 1.59 m × 1.10 m |
 
 
-## Original VGGT/Mask2Former Output Examples
-| Semantic point cloud | Poisson Disk Sampling |`chair` query |
-| --- | --- | --- |
-| ![Semantic point cloud](Images/vggt_spc.png) | ![Poisson mesh](Images/vggt_pds.png) | ![Chair query](Images/vggt_chair_query.png) |
-
-
 
 ## Design Choices
 
@@ -164,11 +162,11 @@ A handheld iPhone 16 Pro clip (4K, 60 fps) of a desk area, processed end-to-end 
 
 ## Limitations
 - Reflective surfaces such as the side of the guitar are noisy and partially missing, as expected from view-dependent reflections. Floor and walls show mild deformation, likely a function of recording style.
-- SAM 3 masks are prompt-dependent. Unlisted objects fall into the "unkown" category.
+- SAM 3 masks are prompt-dependent. Unlisted objects fall into the "unknown" category.
 - Limited GPU usage in Colab. (Note: I'm excited to work in industry where I can utilize more compute rather than T4/L4s in Colab)
 
 ## Future Work
-- Transitioning to affordances learned from interaction data, rather than rule-based affordances, would make the system much more robust fo real-world robotics.
+- Transitioning to affordances learned from interaction data, rather than rule-based affordances, would make the system much more robust for real-world robotics.
 - Open-vocabulary querying re-runs SAM 3 per query, so distilling dense per-frame features into per-point 3D embeddings would allow for instant queries/faster runtime.
 - Adding a 3D Gaussian Splatting visualization path would produce a more photorealistic output.
 
